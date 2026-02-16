@@ -1,0 +1,192 @@
+categories:
+  consumer_protection:
+    name: "Consumer Protection / Deceptive Practices"
+    keywords:
+      - "deceptive"
+      - "unfair"
+      - "misleading"
+      - "fraud"
+      - "scam"
+      - "false advertising"
+      - "UDAP"
+      - "consumer protection"
+    subcategories:
+      - "False Advertising"
+      - "Deceptive Business Practices"
+      - "Price Gouging"
+      - "Robocalls / Telemarketing"
+      - "Elder Fraud"
+      - "Debt Collection Abuse"
+      - "Auto Dealer Fraud"
+      - "Home Improvement Fraud"
+
+  data_privacy:
+    name: "Data Privacy & Security"
+    keywords:
+      - "privacy"
+      - "data breach"
+      - "personal information"
+      - "CCPA"
+      - "data security"
+      - "biometric"
+      - "tracking"
+      - "children's privacy"
+      - "COPPA"
+    subcategories:
+      - "Data Breach Response Failure"
+      - "Unauthorized Data Collection"
+      - "Children's Privacy (COPPA)"
+      - "Biometric Privacy"
+      - "Health Data Privacy"
+
+  antitrust:
+    name: "Antitrust / Competition"
+    keywords:
+      - "antitrust"
+      - "monopoly"
+      - "price-fixing"
+      - "anti-competitive"
+      - "merger"
+      - "market allocation"
+      - "bid rigging"
+    subcategories:
+      - "Price Fixing"
+      - "Market Allocation"
+      - "Monopolistic Practices"
+      - "Merger Challenges"
+
+  healthcare:
+    name: "Healthcare Fraud"
+    keywords:
+      - "medicaid"
+      - "medicare"
+      - "false claims"
+      - "kickback"
+      - "healthcare fraud"
+      - "pharmaceutical"
+      - "drug pricing"
+      - "opioid"
+    subcategories:
+      - "Medicaid Fraud"
+      - "False Claims"
+      - "Kickbacks"
+      - "Drug Pricing"
+      - "Opioid-Related"
+
+  environmental:
+    name: "Environmental"
+    keywords:
+      - "pollution"
+      - "environmental"
+      - "clean water"
+      - "clean air"
+      - "hazardous"
+      - "PFAS"
+      - "contamination"
+      - "emissions"
+    subcategories:
+      - "Water Contamination"
+      - "Air Quality"
+      - "Hazardous Waste"
+      - "PFAS / Chemical Contamination"
+
+  securities:
+    name: "Securities / Investment Fraud"
+    keywords:
+      - "securities fraud"
+      - "securities violation"
+      - "investment fraud"
+      - "ponzi"
+      - "broker-dealer"
+      - "fiduciary"
+      - "cryptocurrency fraud"
+      - "investment scheme"
+    subcategories:
+      - "Investment Fraud"
+      - "Broker-Dealer Violations"
+      - "Cryptocurrency Fraud"
+
+  housing_lending:
+    name: "Housing & Lending"
+    keywords:
+      - "mortgage"
+      - "predatory lending"
+      - "foreclosure"
+      - "redlining"
+      - "fair housing"
+      - "rental fraud"
+      - "landlord"
+      - "eviction"
+      - "housing discrimination"
+    subcategories:
+      - "Predatory Lending"
+      - "Mortgage Fraud"
+      - "Fair Housing"
+      - "Landlord-Tenant"
+
+  employment:
+    name: "Wage & Employment"
+    keywords:
+      - "wage theft"
+      - "minimum wage"
+      - "overtime"
+      - "misclassification"
+      - "worker misclassification"
+      - "labor law"
+      - "labor violation"
+      - "employment discrimination"
+      - "workplace safety"
+      - "unpaid wages"
+    subcategories:
+      - "Wage Theft"
+      - "Worker Misclassification"
+      - "Workplace Safety"
+      - "Discrimination"
+
+  telecommunications:
+    name: "Telecommunications"
+    keywords:
+      - "telecom"
+      - "wireless"
+      - "broadband"
+      - "cable"
+      - "internet service"
+      - "cramming"
+      - "slamming"
+
+  charitable:
+    name: "Charitable Solicitation / Nonprofit"
+    keywords:
+      - "charity fraud"
+      - "charitable solicitation"
+      - "nonprofit fraud"
+      - "fake charity"
+      - "charitable organization"
+      - "donation fraud"
+
+  tobacco_vaping:
+    name: "Tobacco & Vaping"
+    keywords:
+      - "tobacco"
+      - "vaping"
+      - "e-cigarette"
+      - "juul"
+      - "cigarette"
+      - "nicotine"
+      - "youth tobacco"
+
+  tech_platform:
+    name: "Technology Platform Accountability"
+    keywords:
+      - "social media"
+      - "algorithm"
+      - "content moderation"
+      - "app store"
+      - "tech company"
+      - "tech giant"
+      - "artificial intelligence"
+      - "online platform"
+
+  other:
+    name: "Other"
+    keywords: []

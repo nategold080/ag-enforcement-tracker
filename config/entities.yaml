@@ -1,0 +1,187 @@
+# Known entity aliases mapped to canonical names.
+# Used during entity resolution to deterministically match company names.
+# Seeded with top companies that commonly appear in AG enforcement actions.
+
+aliases:
+  # Big Tech
+  "Alphabet": "Google"
+  "Alphabet Inc": "Google"
+  "Google LLC": "Google"
+  "Google Inc": "Google"
+  "Meta Platforms": "Meta"
+  "Meta Platforms Inc": "Meta"
+  "Facebook": "Meta"
+  "Facebook Inc": "Meta"
+  "Instagram": "Meta"
+  "WhatsApp": "Meta"
+  "Amazon.com": "Amazon"
+  "Amazon.com Inc": "Amazon"
+  "Amazon.com Services": "Amazon"
+  "Amazon Web Services": "Amazon"
+  "Apple Inc": "Apple"
+  "Microsoft Corp": "Microsoft"
+  "Microsoft Corporation": "Microsoft"
+  "Twitter": "X Corp"
+  "Twitter Inc": "X Corp"
+  "TikTok": "ByteDance"
+  "TikTok Inc": "ByteDance"
+  "Snap Inc": "Snap"
+  "Snapchat": "Snap"
+
+  # Telecom
+  "AT&T Inc": "AT&T"
+  "AT&T Mobility": "AT&T"
+  "T-Mobile US": "T-Mobile"
+  "T-Mobile USA": "T-Mobile"
+  "Verizon Communications": "Verizon"
+  "Verizon Wireless": "Verizon"
+  "Comcast Corporation": "Comcast"
+  "Comcast Cable": "Comcast"
+  "Charter Communications": "Charter Communications"
+  "Spectrum": "Charter Communications"
+
+  # Banks / Financial
+  "Wells Fargo & Company": "Wells Fargo"
+  "Wells Fargo Bank": "Wells Fargo"
+  "JPMorgan Chase & Co": "JPMorgan Chase"
+  "JPMorgan Chase Bank": "JPMorgan Chase"
+  "JP Morgan": "JPMorgan Chase"
+  "Bank of America Corporation": "Bank of America"
+  "Bank of America NA": "Bank of America"
+  "Citigroup": "Citigroup"
+  "Citibank": "Citigroup"
+  "Citi": "Citigroup"
+  "Goldman Sachs Group": "Goldman Sachs"
+  "Morgan Stanley & Co": "Morgan Stanley"
+  "Capital One Financial": "Capital One"
+  "Capital One Bank": "Capital One"
+  "Navient Corporation": "Navient"
+  "Navient Solutions": "Navient"
+
+  # Pharma / Healthcare
+  "Johnson & Johnson": "Johnson & Johnson"
+  "Janssen Pharmaceuticals": "Johnson & Johnson"
+  "Pfizer Inc": "Pfizer"
+  "AbbVie Inc": "AbbVie"
+  "Allergan": "AbbVie"
+  "McKesson Corporation": "McKesson"
+  "Cardinal Health": "Cardinal Health"
+  "AmerisourceBergen": "Cencora"
+  "Cencora Inc": "Cencora"
+  "Purdue Pharma": "Purdue Pharma"
+  "Purdue Pharma LP": "Purdue Pharma"
+  "Teva Pharmaceutical": "Teva"
+  "Teva Pharmaceuticals USA": "Teva"
+  "Endo International": "Endo"
+  "Endo Health Solutions": "Endo"
+  "Mallinckrodt": "Mallinckrodt"
+  "CVS Health": "CVS Health"
+  "CVS Pharmacy": "CVS Health"
+  "Walgreens Boots Alliance": "Walgreens"
+  "Walgreen Co": "Walgreens"
+  "UnitedHealth Group": "UnitedHealth Group"
+  "UnitedHealthcare": "UnitedHealth Group"
+
+  # Auto
+  "General Motors Company": "General Motors"
+  "GM": "General Motors"
+  "Ford Motor Company": "Ford"
+  "Ford Motor Co": "Ford"
+  "Volkswagen AG": "Volkswagen"
+  "Volkswagen Group of America": "Volkswagen"
+  "VW": "Volkswagen"
+  "Toyota Motor": "Toyota"
+  "Toyota Motor Sales": "Toyota"
+  "Hyundai Motor": "Hyundai"
+  "Hyundai Motor America": "Hyundai"
+  "Kia Motors": "Kia"
+  "Kia America": "Kia"
+  "Stellantis": "Stellantis"
+  "FCA US": "Stellantis"
+  "Fiat Chrysler": "Stellantis"
+  "Tesla Inc": "Tesla"
+  "Tesla Motors": "Tesla"
+
+  # Retail / Consumer
+  "Walmart Inc": "Walmart"
+  "Wal-Mart Stores": "Walmart"
+  "Target Corporation": "Target"
+  "The Kroger Co": "Kroger"
+
+  # Insurance
+  "State Farm Mutual": "State Farm"
+  "Allstate Corporation": "Allstate"
+  "Allstate Insurance": "Allstate"
+  "GEICO": "GEICO"
+
+  # Tobacco / Vaping
+  "JUUL Labs": "Juul Labs"
+  "Juul Labs Inc": "Juul Labs"
+  "Philip Morris International": "Philip Morris"
+  "Philip Morris USA": "Philip Morris"
+  "Altria Group": "Altria"
+  "R.J. Reynolds": "R.J. Reynolds"
+  "RJ Reynolds": "R.J. Reynolds"
+  "Reynolds American": "R.J. Reynolds"
+
+  # Energy
+  "ExxonMobil": "ExxonMobil"
+  "Exxon Mobil Corporation": "ExxonMobil"
+  "Chevron Corporation": "Chevron"
+  "BP": "BP"
+  "BP America": "BP"
+  "Shell": "Shell"
+  "Shell Oil": "Shell"
+  "Royal Dutch Shell": "Shell"
+
+  # Other frequently enforced
+  "Equifax Inc": "Equifax"
+  "Experian": "Experian"
+  "TransUnion": "TransUnion"
+  "3M Company": "3M"
+  "3M Co": "3M"
+  "DuPont": "DuPont"
+  "E.I. du Pont de Nemours": "DuPont"
+  "Chemours": "Chemours"
+  "The Chemours Company": "Chemours"
+
+# Canonical entity metadata (optional enrichment)
+entities:
+  Google:
+    entity_type: "corporation"
+    industry: "Technology"
+    sec_cik: "0001652044"
+  Meta:
+    entity_type: "corporation"
+    industry: "Technology"
+    sec_cik: "0001326801"
+  Amazon:
+    entity_type: "corporation"
+    industry: "Technology / Retail"
+    sec_cik: "0001018724"
+  Apple:
+    entity_type: "corporation"
+    industry: "Technology"
+    sec_cik: "0000320193"
+  Wells Fargo:
+    entity_type: "corporation"
+    industry: "Financial Services"
+    sec_cik: "0000072971"
+  JPMorgan Chase:
+    entity_type: "corporation"
+    industry: "Financial Services"
+    sec_cik: "0000019617"
+  Johnson & Johnson:
+    entity_type: "corporation"
+    industry: "Pharmaceuticals"
+    sec_cik: "0000200406"
+  Purdue Pharma:
+    entity_type: "corporation"
+    industry: "Pharmaceuticals"
+  Juul Labs:
+    entity_type: "corporation"
+    industry: "Tobacco / Vaping"
+  Volkswagen:
+    entity_type: "corporation"
+    industry: "Automotive"
+    sec_cik: "0000076207"
