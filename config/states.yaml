@@ -1,0 +1,316 @@
+# Per-state scraper configuration.
+# The base scraper class reads this config and handles common CMS patterns.
+# Custom Python scraper code is only needed when the site requires it.
+
+california:
+  name: "California"
+  code: "CA"
+  ag_office: "Office of the Attorney General"
+  base_url: "https://oag.ca.gov"
+  press_release_url: "https://oag.ca.gov/media/news"
+  pagination:
+    type: "query_param"
+    param: "page"
+    start: 0
+  selectors:
+    listing_item: ".views-row"
+    title: ".views-field-title a"
+    date: ".date-display-single"
+    link: ".views-field-title a"
+    body: ".field-name-body .field-item"
+  link_attribute: "href"
+  date_format: "%B %d, %Y"
+  rate_limit_seconds: 2
+  active: true
+  notes: "Robust paginated archive. Drupal 7 Views with .views-row listing structure. Body text is clean HTML."
+
+new_york:
+  name: "New York"
+  code: "NY"
+  ag_office: "Office of the Attorney General"
+  base_url: "https://ag.ny.gov"
+  press_release_url: "https://ag.ny.gov/press-releases"
+  pagination:
+    type: "query_param"
+    param: "page"
+    start: 0
+  selectors:
+    listing_item: ".views-row"
+    title: "a"
+    date: "time"
+    link: "a"
+    body: ".node__content"
+  link_attribute: "href"
+  date_format: "%B %d, %Y"
+  rate_limit_seconds: 2
+  active: true
+  notes: "Drupal 10. .views-row items with <time> for dates. 25 items per page. Pagination via ?page=N."
+
+ohio:
+  name: "Ohio"
+  code: "OH"
+  ag_office: "Office of the Attorney General"
+  base_url: "https://www.ohioattorneygeneral.gov"
+  press_release_url: "https://www.ohioattorneygeneral.gov/Media/News-Releases"
+  pagination:
+    type: "query_param"
+    param: "page"
+    start: 1
+  selectors:
+    listing_item: ".ohio-news"
+    title: "h3 a"
+    date: ".news-date"
+    link: "h3 a"
+    body: ".newsbody"
+  link_attribute: "href"
+  date_format: "%-m/%-d/%Y"
+  rate_limit_seconds: 2
+  active: true
+  notes: "Kentico CMS. .ohio-news items with h3 a titles and .news-date. Body in .newsbody on detail pages."
+
+virginia:
+  name: "Virginia"
+  code: "VA"
+  ag_office: "Office of the Attorney General"
+  base_url: "https://www.oag.state.va.us"
+  press_release_url: "https://www.oag.state.va.us/media-center/news-releases"
+  pagination:
+    type: "query_param"
+    param: "start"
+    start: 0
+  selectors:
+    listing_item: "tr"
+    title: "a"
+    date: ""
+    link: "a"
+    body: ".com-content-article__body"
+  link_attribute: "href"
+  rate_limit_seconds: 2
+  active: true
+  notes: "Joomla with Gantry 5. Table-based listing in .category-list. Body in .com-content-article__body. No dates in listing — extracted from body text."
+
+oregon:
+  name: "Oregon"
+  code: "OR"
+  ag_office: "Department of Justice"
+  base_url: "https://www.doj.state.or.us"
+  press_release_url: "https://www.doj.state.or.us/media/news-media-releases/oregon-doj-news/"
+  pagination:
+    type: "query_param"
+    param: "sf_paged"
+    start: 1
+  selectors:
+    listing_item: ".results-item"
+    title: "h3 a"
+    date: ".date"
+    link: "h3 a"
+    body: "article.single-article"
+  link_attribute: "href"
+  rate_limit_seconds: 2
+  active: true
+  notes: "WordPress with custom theme. .results-item listing items. article:published_time meta tag for dates. Body in article.single-article."
+
+pennsylvania:
+  name: "Pennsylvania"
+  code: "PA"
+  ag_office: "Office of the Attorney General"
+  base_url: "https://www.attorneygeneral.gov"
+  press_release_url: "https://www.attorneygeneral.gov/taking-action/"
+  pagination:
+    type: "query_param"
+    param: "paged"
+    start: 1
+  selectors:
+    listing_item: ".ta-card"
+    title: "a"
+    date: ".ta-card-date"
+    link: "a"
+    body: ".entry-content"
+  link_attribute: "href"
+  rate_limit_seconds: 2
+  active: true
+  notes: "WordPress. Custom 'Taking Action' post type. Needs custom scraper for listing parsing."
+
+texas:
+  name: "Texas"
+  code: "TX"
+  ag_office: "Office of the Attorney General"
+  base_url: "https://www.texasattorneygeneral.gov"
+  press_release_url: "https://www.texasattorneygeneral.gov/news/press_releases"
+  pagination:
+    type: "query_param"
+    param: "page"
+    start: 0
+  selectors:
+    listing_item: "div.m-b-3"
+    title: "h4 a"
+    date: ""
+    link: "h4 a"
+    body: ".main-content-wysiwyg-container"
+  link_attribute: "href"
+  rate_limit_seconds: 2
+  active: true
+  notes: "Drupal 10. Listing uses div.m-b-3 with h4.h4-sans a links. No dates on listing page. Body in .main-content-wysiwyg-container."
+
+maryland:
+  name: "Maryland"
+  code: "MD"
+  ag_office: "Office of the Attorney General"
+  base_url: "https://oag.maryland.gov"
+  press_release_url: "https://oag.maryland.gov/News/Pages/press-release-archive.aspx"
+  pagination:
+    type: "none"
+  selectors:
+    listing_item: "a[href*='/News/Documents/']"
+    title: ""
+    date: ""
+    link: ""
+    body: ""
+  link_attribute: "href"
+  rate_limit_seconds: 2
+  active: false
+  notes: "SharePoint-based. Press releases are PDF documents, not HTML pages. Requires PDF parsing. Deferred."
+
+colorado:
+  name: "Colorado"
+  code: "CO"
+  ag_office: "Office of the Attorney General"
+  base_url: "https://coag.gov"
+  press_release_url: "https://coag.gov/press-releases/"
+  pagination:
+    type: "query_param"
+    param: "paged"
+    start: 1
+  selectors:
+    listing_item: "article"
+    title: ".entry-title a"
+    date: "time"
+    link: ".entry-title a"
+    body: ".entry-content"
+  link_attribute: "href"
+  rate_limit_seconds: 2
+  active: false
+  notes: "WordPress + Vue.js for press archive. Content loaded dynamically. May need API access or JS rendering. Deferred."
+
+washington:
+  name: "Washington"
+  code: "WA"
+  ag_office: "Office of the Attorney General"
+  base_url: "https://www.atg.wa.gov"
+  press_release_url: "https://www.atg.wa.gov/pressrelease.aspx"
+  pagination:
+    type: "query_param"
+    param: "page"
+    start: 0
+  selectors:
+    listing_item: ".views-row"
+    title: ".views-field-title a"
+    date: "time"
+    link: ".views-field-title a"
+    body: "#block-atg-content article"
+  link_attribute: "href"
+  date_format: "%b %d %Y"
+  rate_limit_seconds: 2
+  use_browser_ua: true
+  active: true
+  notes: "Drupal 10. .views-row items with time[datetime] dates. 10 items per page. Body in #block-atg-content article. Requires browser UA."
+
+connecticut:
+  name: "Connecticut"
+  code: "CT"
+  ag_office: "Office of the Attorney General"
+  base_url: "https://portal.ct.gov"
+  press_release_url: "https://portal.ct.gov/ag/press-releases/2025-press-releases"
+  pagination:
+    type: "none"
+  selectors:
+    listing_item: ".cg-c-list__link"
+    title: ""
+    date: ""
+    link: ""
+    body: ".cg-c-content"
+  link_attribute: "href"
+  rate_limit_seconds: 2
+  active: false
+  notes: "Custom CT.gov portal. Year-based navigation. Needs custom scraper. Deferred."
+
+massachusetts:
+  name: "Massachusetts"
+  code: "MA"
+  ag_office: "Office of the Attorney General"
+  base_url: "https://www.mass.gov"
+  press_release_url: "https://www.mass.gov/lists/ag-press-releases"
+  pagination:
+    type: "query_param"
+    param: "page"
+    start: 0
+  selectors:
+    listing_item: ".ma__press-listing__item"
+    title: "h2 a"
+    date: ".ma__press-listing__date"
+    link: "h2 a"
+    body: ".ma__rich-text"
+  link_attribute: "href"
+  date_format: "%m/%d/%Y"
+  rate_limit_seconds: 2
+  active: false
+  notes: "Site returns 403. Needs Wayback Machine fixtures. Deferred."
+
+illinois:
+  name: "Illinois"
+  code: "IL"
+  ag_office: "Office of the Attorney General"
+  base_url: "https://www.illinoisattorneygeneral.gov"
+  press_release_url: "https://www.illinoisattorneygeneral.gov/news"
+  pagination:
+    type: "none"
+  selectors:
+    listing_item: ".news-item"
+    title: "a"
+    date: ".date"
+    link: "a"
+    body: ".content"
+  link_attribute: "href"
+  rate_limit_seconds: 2
+  active: false
+  notes: "Site returning 404 for press release pages. Needs Wayback Machine. Deferred."
+
+minnesota:
+  name: "Minnesota"
+  code: "MN"
+  ag_office: "Office of the Attorney General"
+  base_url: "https://www.ag.state.mn.us"
+  press_release_url: "https://www.ag.state.mn.us/office/communications.asp"
+  pagination:
+    type: "none"
+  selectors:
+    listing_item: "tr"
+    title: "a"
+    date: ""
+    link: "a"
+    body: ""
+  link_attribute: "href"
+  rate_limit_seconds: 2
+  active: false
+  notes: "Classic ASP site. Needs investigation of HTML structure. Deferred."
+
+new_jersey:
+  name: "New Jersey"
+  code: "NJ"
+  ag_office: "Office of the Attorney General"
+  base_url: "https://www.njoag.gov"
+  press_release_url: "https://www.njoag.gov/category/press-releases/"
+  pagination:
+    type: "query_param"
+    param: "paged"
+    start: 1
+  selectors:
+    listing_item: "article"
+    title: ".entry-title a"
+    date: "time"
+    link: ".entry-title a"
+    body: ".entry-content"
+  link_attribute: "href"
+  rate_limit_seconds: 2
+  active: false
+  notes: "Site returns 403. Needs Wayback Machine fixtures. Deferred."

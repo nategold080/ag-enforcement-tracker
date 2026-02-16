@@ -1,0 +1,686 @@
+"""Regex and rule-based extraction patterns for AG enforcement press releases.
+
+This module contains deterministic extractors for structured fields:
+- Dollar amounts (settlement values, penalties, restitution)
+- Dates (filing dates, resolution dates)
+- Statute citations
+- Defendant names (rule-based extraction from headline and body patterns)
+- Action type classification
+"""
+
+import re
+from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal, InvalidOperation
+from typing import Optional
+
+import dateparser
+
+
+# ---------------------------------------------------------------------------
+# Dollar Amount Extraction
+# ---------------------------------------------------------------------------
+
+# Pattern matches: $1.5 million, $3,500,000, $500,000.00, $1.2 billion, etc.
+_DOLLAR_RE = re.compile(
+    r'\$\s*'
+    r'([\d,]+(?:\.\d+)?)'     # numeric part: 3,500,000 or 1.5
+    r'\s*'
+    r'(million|billion|thousand|[MBKmbk](?=\b|\s|[^a-zA-Z]))?',  # optional multiplier (incl. M/B/K abbreviations)
+    re.IGNORECASE,
+)
+
+_MULTIPLIERS = {
+    "thousand": Decimal("1000"),
+    "million": Decimal("1000000"),
+    "billion": Decimal("1000000000"),
+    "k": Decimal("1000"),
+    "m": Decimal("1000000"),
+    "b": Decimal("1000000000"),
+}
+
+_APPROX_RE = re.compile(
+    r'(?:approximately|about|roughly|nearly|up\s+to|more\s+than|over|at\s+least|exceed)',
+    re.IGNORECASE,
+)
+
+
+@dataclass
+class ExtractedAmount:
+    raw_text: str
+    amount: Decimal
+    is_estimated: bool
+
+
+def extract_dollar_amounts(text: str) -> list[ExtractedAmount]:
+    """Extract all dollar amounts from text, returning structured results."""
+    results = []
+    for match in _DOLLAR_RE.finditer(text):
+        raw = match.group(0)
+        num_str = match.group(1).replace(",", "")
+        multiplier_word = match.group(2)
+
+        try:
+            value = Decimal(num_str)
+        except InvalidOperation:
+            continue
+
+        if multiplier_word:
+            value *= _MULTIPLIERS.get(multiplier_word.lower(), Decimal("1"))
+
+        # Check for approximation language in the 40 chars before the match
+        start = max(0, match.start() - 40)
+        preceding = text[start:match.start()]
+        is_estimated = bool(_APPROX_RE.search(preceding))
+
+        results.append(ExtractedAmount(raw_text=raw, amount=value, is_estimated=is_estimated))
+
+    return results
+
+
+def extract_largest_dollar_amount(text: str) -> Optional[ExtractedAmount]:
+    """Return the largest dollar amount found in the text, or None."""
+    amounts = extract_dollar_amounts(text)
+    if not amounts:
+        return None
+    return max(amounts, key=lambda a: a.amount)
+
+
+# Settlement-context dollar amount pattern — looks for "$X" near settlement/penalty keywords
+_SETTLEMENT_CONTEXT_RE = re.compile(
+    r'(?:settl(?:ement|ed|es|ing)|penalt(?:y|ies)|restitution|judgment|consent\s+decree|pay(?:ing)?)\s+'
+    r'(?:of\s+|totaling\s+|worth\s+|valued?\s+at\s+|for\s+)?'
+    r'(?:(?:approximately|about|nearly|over|more\s+than|at\s+least|up\s+to)\s+)?'
+    r'\$\s*([\d,]+(?:\.\d+)?)\s*(million|billion|thousand)?',
+    re.IGNORECASE,
+)
+
+_HEADLINE_DOLLAR_RE = re.compile(
+    r'\$\s*([\d,]+(?:\.\d+)?)\s*(million|billion|thousand)?',
+    re.IGNORECASE,
+)
+
+
+def extract_settlement_amount(headline: str, body: str) -> Optional[ExtractedAmount]:
+    """Extract the most relevant settlement/penalty dollar amount.
+
+    Priority:
+    1. Dollar amount in the headline (strongest signal — editors put the key number there)
+    2. Dollar amount near settlement/penalty keywords in body text
+    3. Fallback: largest dollar amount in body
+    """
+    # Priority 1: Headline amount
+    headline_amounts = extract_dollar_amounts(headline)
+    if headline_amounts:
+        return max(headline_amounts, key=lambda a: a.amount)
+
+    # Priority 2: Amount in settlement context in body
+    match = _SETTLEMENT_CONTEXT_RE.search(body)
+    if match:
+        num_str = match.group(1).replace(",", "")
+        try:
+            value = Decimal(num_str)
+            multiplier_word = match.group(2)
+            if multiplier_word:
+                value *= _MULTIPLIERS.get(multiplier_word.lower(), Decimal("1"))
+            raw = match.group(0)
+            # Check for approximation language
+            start = max(0, match.start() - 40)
+            preceding = body[start:match.start()]
+            is_estimated = bool(_APPROX_RE.search(preceding))
+            return ExtractedAmount(raw_text=raw, amount=value, is_estimated=is_estimated)
+        except InvalidOperation:
+            pass
+
+    # Priority 3: Fallback to largest amount in body
+    return extract_largest_dollar_amount(body)
+
+
+# ---------------------------------------------------------------------------
+# Penalty/Restitution Classification
+# ---------------------------------------------------------------------------
+
+_PENALTY_PATTERNS = [
+    (re.compile(r'civil\s+penalt(?:y|ies)\s+(?:of\s+)?\$\s*([\d,.]+)\s*(million|billion|thousand)?', re.IGNORECASE), "civil_penalty"),
+    (re.compile(r'(?:consumer\s+)?restitution\s+(?:of\s+)?\$\s*([\d,.]+)\s*(million|billion|thousand)?', re.IGNORECASE), "consumer_restitution"),
+    (re.compile(r'(?:attorney.?s?\s+)?fees?\s+(?:and\s+costs?\s+)?(?:of\s+)?\$\s*([\d,.]+)\s*(million|billion|thousand)?', re.IGNORECASE), "fees_and_costs"),
+]
+
+
+def classify_monetary_components(text: str) -> dict[str, Decimal]:
+    """Extract categorized monetary components from text."""
+    components: dict[str, Decimal] = {}
+    for pattern, label in _PENALTY_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            num_str = match.group(1).replace(",", "")
+            try:
+                value = Decimal(num_str)
+                multiplier_word = match.group(2)
+                if multiplier_word:
+                    value *= _MULTIPLIERS.get(multiplier_word.lower(), Decimal("1"))
+                components[label] = value
+            except (InvalidOperation, IndexError):
+                continue
+    return components
+
+
+# ---------------------------------------------------------------------------
+# Date Extraction
+# ---------------------------------------------------------------------------
+
+_FILED_DATE_RE = re.compile(
+    r'(?:filed|filing)\s+(?:on\s+)?(\w+\s+\d{1,2},?\s+\d{4})',
+    re.IGNORECASE,
+)
+
+_RESOLVED_DATE_RE = re.compile(
+    r'(?:settled|resolved|entered|approved|signed)\s+(?:on\s+)?(\w+\s+\d{1,2},?\s+\d{4})',
+    re.IGNORECASE,
+)
+
+
+def extract_announced_date(text: str) -> Optional[date]:
+    """Extract the publication/announcement date from press release text.
+
+    Searches progressively deeper into the text: first 300 chars, then 1000,
+    then 2000. Many press releases have navigation boilerplate at the top
+    (especially Wayback Machine captures), so the actual date may be further in.
+    """
+    _date_re = re.compile(
+        r'((?:January|February|March|April|May|June|July|August|September|'
+        r'October|November|December)\s+\d{1,2},?\s+\d{4})'
+    )
+
+    # Search progressively deeper
+    for limit in [300, 1000, 2000]:
+        header = text[:limit]
+
+        # Pattern: "Month DD, YYYY" — the most common format
+        match = _date_re.search(header)
+        if match:
+            parsed = dateparser.parse(match.group(1))
+            if parsed and 2018 <= parsed.year <= 2030:
+                return parsed.date()
+
+        # Pattern: "MM/DD/YYYY" or "MM-DD-YYYY"
+        match = re.search(r'(\d{1,2}[/-]\d{1,2}[/-]\d{4})', header)
+        if match:
+            parsed = dateparser.parse(match.group(1))
+            if parsed and 2018 <= parsed.year <= 2030:
+                return parsed.date()
+
+    return None
+
+
+def extract_filed_date(text: str) -> Optional[date]:
+    """Extract a filing date from press release text."""
+    match = _FILED_DATE_RE.search(text)
+    if match:
+        parsed = dateparser.parse(match.group(1))
+        if parsed:
+            return parsed.date()
+    return None
+
+
+def extract_resolved_date(text: str) -> Optional[date]:
+    """Extract a resolution/settlement date from press release text."""
+    match = _RESOLVED_DATE_RE.search(text)
+    if match:
+        parsed = dateparser.parse(match.group(1))
+        if parsed:
+            return parsed.date()
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Statute Citation Extraction
+# ---------------------------------------------------------------------------
+
+_STATUTE_PATTERNS = [
+    # California statutes: "Business and Professions Code section 17200"
+    re.compile(r'(?:California\s+)?(\w[\w\s]+?)\s+Code\s+(?:section|§§?)\s*([\d.]+(?:\s*(?:et\s+seq|through)\s*[\d.]*)?)', re.IGNORECASE),
+    # Federal statutes by USC: "15 U.S.C. § 45"
+    re.compile(r'(\d+)\s+U\.?S\.?C\.?\s*§?\s*([\d]+(?:\([a-z]\))?)', re.IGNORECASE),
+    # Common law names
+    re.compile(r'\b(Sherman\s+Act|Clayton\s+Act|FTC\s+Act|False\s+Claims\s+Act|CCPA|COPPA|TCPA|CAN-SPAM|HIPAA|FCRA|UDAP|Unfair\s+Competition\s+Laws?|UCL|Telephone\s+Consumer\s+Protection\s+Act|Telemarketing\s+Sales\s+Rule|Truth\s+in\s+Caller\s+ID\s+Act|Anti-?Kickback\s+Statute|Stark\s+Law|Unclaimed\s+Property\s+Law)\b', re.IGNORECASE),
+    # "in violation of" / "violating" pattern (allows commas for lists of laws)
+    re.compile(r'(?:in\s+violation\s+of|violat(?:ed|ing))\s+(?:the\s+|state\s+)?(?:[\w\s,]+?\s+)((?:Act|Laws?|Code|Statute|Rule|Regulation)s?)\b', re.IGNORECASE),
+]
+
+
+@dataclass
+class ExtractedStatute:
+    raw_citation: str
+    is_state: bool
+    is_federal: bool
+    common_name: str
+
+
+_FEDERAL_INDICATORS = {"u.s.c.", "usc", "federal", "ftc", "sherman", "clayton", "can-spam", "hipaa", "fcra", "coppa", "tcpa"}
+_STATE_INDICATORS = {"california", "business and professions", "civil code", "health and safety", "penal code", "ccpa", "ucl", "unfair competition"}
+
+
+def extract_statutes(text: str) -> list[ExtractedStatute]:
+    """Extract statute citations from press release text."""
+    results = []
+    seen_raw: set[str] = set()
+
+    for pattern in _STATUTE_PATTERNS:
+        for match in pattern.finditer(text):
+            raw = match.group(0).strip()
+            if raw in seen_raw:
+                continue
+            seen_raw.add(raw)
+
+            raw_lower = raw.lower()
+            is_federal = any(ind in raw_lower for ind in _FEDERAL_INDICATORS)
+            is_state = any(ind in raw_lower for ind in _STATE_INDICATORS)
+
+            # Determine common name
+            common_name = ""
+            if "ccpa" in raw_lower or "consumer privacy act" in raw_lower:
+                common_name = "CCPA"
+            elif "ucl" in raw_lower or "unfair competition" in raw_lower:
+                common_name = "UCL"
+            elif "false claims" in raw_lower:
+                common_name = "False Claims Act"
+            elif "sherman" in raw_lower:
+                common_name = "Sherman Act"
+            elif "tcpa" in raw_lower:
+                common_name = "TCPA"
+            elif "coppa" in raw_lower:
+                common_name = "COPPA"
+
+            results.append(ExtractedStatute(
+                raw_citation=raw,
+                is_state=is_state,
+                is_federal=is_federal,
+                common_name=common_name,
+            ))
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Defendant Name Extraction
+# ---------------------------------------------------------------------------
+
+# Blocklist: phrases that regex patterns match but are NOT defendant names.
+# Lowercased for comparison.
+_DEFENDANT_BLOCKLIST = {
+    # Legal boilerplate
+    "is presumed innocent",
+    "is presumed innocent until proven guilty",
+    "is presumed innocent until",
+    "are presumed innocent",
+    "are presumed innocent unless proved guilty in a court of law",
+    "presumed innocent until proven guilty",
+    "innocent until proven guilty",
+    "proven guilty",
+    "proved guilty in a court of law",
+    # AG offices and officials (not defendants)
+    "attorney general",
+    "the attorney general",
+    "general bonta",
+    "general james",
+    "general raoul",
+    "general rayfield",
+    "general yost",
+    "general paxton",
+    "general miyares",
+    "general rosenblum",
+    "attorney general bonta",
+    "attorney general james",
+    "attorney general raoul",
+    "attorney general dan rayfield",
+    "attorney general dave yost",
+    "attorney general ken paxton",
+    "attorney general jason miyares",
+    "attorney general ellen rosenblum",
+    "attorney general dan rayfield on court hearing",
+    "the office of the attorney general",
+    "the department of justice",
+    "the district attorney",
+    # Generic descriptors
+    "the company",
+    "the corporation",
+    "the defendant",
+    "the defendants",
+    "the respondent",
+    "the state",
+    "its founder",
+    "founder",
+    "its subsidiaries",
+    "related entities",
+    "other parties",
+    "distributors",
+    "the administration",
+    "trump administration",
+    "the trump administration",
+    "trump administration to protect",
+    "president trump",
+    "president donald trump",
+    # Common false positives from body text patterns
+    "natural disasters. by focusing on preparation",
+    "natural disasters. by focusing on mitigation",
+    "and 10 individual defendants",
+    "and 25 individual executives",
+    "10 individual defendants",
+    "individual defendants",
+    "individual executives",
+    "home décor retailer",
+    "kratom retailers",
+    "seafood distributor",
+    "used-car dealer",
+    "seller",
+    "chile",
+    # Government/political entities (not defendants in AG actions)
+    "biden-harris administration",
+    "biden administration",
+    "trump administration",
+    "the biden administration",
+    "the administration",
+    "biden",
+    "president biden",
+    "donald trump",
+    "president donald trump",
+    "investigation",
+    "notification of",
+    "consumer alert",
+    "federal",
+    "federal law",
+    "complete",
+    "election",
+    "school district",
+    "predatory lender",
+    "electric company",
+    "debt collector",
+    "insurance company",
+    "pharmaceutical company",
+    "drug company",
+    "online retailer",
+    "tech company",
+    "oil company",
+    "gas company",
+    "utility company",
+    "health insurer",
+    "credit bureau",
+    # Generic sentence fragments that match defendant patterns
+    "help", "patient", "them", "their", "its owners", "it owners",
+    "his", "her", "owners", "owner", "its parent", "its ceo",
+    "his companies", "her companies", "guidance", "guidance to help",
+    "children", "ice", "pharmaceutical", "real estate",
+    "business", "disabilities", "discrimination", "sexual harassment",
+    "mortgage", "three", "two", "four", "three companies",
+    "four companies", "any", "major", "operating", "nation",
+    "transgender", "predatory", "spread of nonconsensual",
+    "members of the sackler family",
+    "the walt disney company",  # will be resolved by entity resolution instead
+}
+
+# Additional blocklist patterns (regex-based for flexible matching)
+_DEFENDANT_BLOCKLIST_PATTERNS = [
+    re.compile(r'^(?:the\s+)?(?:state|county|city|town|district)\s+of\b', re.IGNORECASE),
+    re.compile(r'^(?:attorney|district)\s+general', re.IGNORECASE),
+    re.compile(r'\b(?:presumed|innocent|guilty|convicted)\b', re.IGNORECASE),
+    re.compile(r'^(?:a|an|the|this|that|these|those|his|her|its|their)\s*$', re.IGNORECASE),
+    re.compile(r'^\d+\s+individual\s+', re.IGNORECASE),
+    re.compile(r'^(?:mr|mrs|ms|dr)\.?\s*$', re.IGNORECASE),
+    # "Court Orders Company Required" type false positive
+    re.compile(r'^court\s+orders?\b', re.IGNORECASE),
+    # Generic violation descriptions that get captured as defendants
+    re.compile(r'\b(?:violations?|protection|practices|fraud)\s*$', re.IGNORECASE),
+    # Pure numbers (e.g., "29", "30")
+    re.compile(r'^\d+$'),
+    # "N Companies/Businesses" pattern
+    re.compile(r'^\d+\s+(?:companies|businesses|firms|individuals|defendants)', re.IGNORECASE),
+    # Generic role descriptions
+    re.compile(r'^(?:federal|state|local)\s+(?:government|officials|agencies)', re.IGNORECASE),
+]
+
+
+def _is_valid_defendant_name(name: str) -> bool:
+    """Check if a candidate name looks like a real defendant (person or company)."""
+    name_stripped = name.strip()
+    name_lower = name_stripped.lower()
+
+    # Too short or too long — real defendant names are at least 3 chars
+    # and single-letter names are never real entities
+    if len(name_stripped) < 3 or len(name_stripped) > 120:
+        return False
+
+    # Single word must be at least 3 chars (reject "U", "It"-type noise)
+    # 3-char acronyms like CVS, IBM, 3M are valid company names
+    words = name_stripped.split()
+    if len(words) == 1 and len(name_stripped) < 3:
+        return False
+
+    # Check exact blocklist
+    if name_lower in _DEFENDANT_BLOCKLIST:
+        return False
+
+    # Check blocklist patterns
+    for pattern in _DEFENDANT_BLOCKLIST_PATTERNS:
+        if pattern.search(name_stripped):
+            return False
+
+    # Must contain at least one letter
+    if not re.search(r'[a-zA-Z]', name_stripped):
+        return False
+
+    # Reject if it's mostly lowercase words (sentence fragments, not names)
+    words = name_stripped.split()
+    if len(words) > 3:
+        lowercase_words = sum(1 for w in words if w[0].islower() and w not in ('and', 'of', 'the', 'de', 'von', 'van'))
+        if lowercase_words > len(words) * 0.6:
+            return False
+
+    return True
+
+
+# Headline patterns: "AG Sues [Company]", "Settlement with [Company]"
+_HEADLINE_DEFENDANT_PATTERNS = [
+    # 1. Core: "sues/action against [Company] for/over..."
+    re.compile(r'(?:sues?|lawsuit\s+against|action\s+against)\s+([\w\s,.&\'-]+?)(?:\s+(?:for|over|in|regarding|alleging|with))', re.IGNORECASE),
+    # 2. "settlement with [Company]" terminated by for/over/to or end-of-string/comma
+    re.compile(r'settlement\s+with\s+([\w\s,.&\'-]+?)(?:\s+(?:for|over|in|regarding|resolving|to)|$)', re.IGNORECASE),
+    # 3. "Charges [Company] with/over/for" — BEFORE generic "with" and "against"
+    re.compile(r'\bcharges?\s+([\w\s,.&\'-]{2,50}?)\s+(?:with|over|for)\b', re.IGNORECASE),
+    # 4. "from [Company]" pattern for settlements — "$X from Company for ..."
+    re.compile(r'(?:from)\s+([\w\s,.&\'-]+?)(?:\s+(?:for|over|in|regarding|fueling|alleging))', re.IGNORECASE),
+    # 5. "Against [Company]," or "Against [Company] for/over/..." or end-of-string (incl. "charges against")
+    re.compile(r'(?:charges?\s+against|against)\s+([\w\s,.&\'-]+?)(?:\s*,\s*|\s+(?:for|over|in|regarding|benefiting|resulting)|$)', re.IGNORECASE),
+    # 6. Broader "with [Company]" pattern
+    re.compile(r'(?:with)\s+([\w\s,.&\'-]+?)(?:\s*,\s*|\s+(?:for|over|in|regarding|resolving|to)|$)', re.IGNORECASE),
+    # 7. "v. [Company]" case name pattern (e.g., "Suit v. Apple" or "v. Google Inc.")
+    re.compile(r'\bv\.?\s+([\w\s,.&\'-]+?)(?:\s*$|\s*[,;]|\s+(?:for|over|in|regarding|that))', re.IGNORECASE),
+    # 8. "[Company] Must Pay / to Pay / Agrees to Pay"
+    re.compile(r'(?:^|:\s*)([\w\s,.&\'-]+?)\s+(?:Must|Agrees?\s+to|to|Will|Ordered\s+to)\s+Pay\b', re.IGNORECASE),
+    # 9. "Investigation Into [Company]"
+    re.compile(r'(?:investigation\s+(?:into|of))\s+([\w\s,.&\'-]+?)(?:\s+(?:for|over|regarding|alleging|results|leads|reveals)|[,;]|$)', re.IGNORECASE),
+    # 10. "Stops/Halts/Shuts Down [Company]"
+    re.compile(r"(?:stops?|halts?|shuts?\s+down)\s+([\w\s,.&\'-]+?)(?:\s*(?:'s)?\s+(?:for|over|from|illegal|unlawful|deceptive))", re.IGNORECASE),
+    # 11. "Secures/Recovers ... from [Company]"
+    re.compile(r'(?:secures?|recovers?|obtains?)\s+[\$\d][\$\d\w\s,.]*?\s+from\s+([\w\s,.&\'-]+?)(?:\s+(?:for|over|in|to)|[,;]|$)', re.IGNORECASE),
+    # 12. "[Company] Ordered/Required to"
+    re.compile(r'(?:^|:\s*)([\w\s,.&\'-]+?)\s+(?:Ordered|Required|Directed)\s+to\b', re.IGNORECASE),
+]
+
+# Body patterns: "defendant [Company]", "[Company], a [state]-based"
+_BODY_DEFENDANT_PATTERNS = [
+    re.compile(r'(?:defendant|respondent)s?\s+([\w\s,.&\'-]{3,60}?)(?:\s*[,.])', re.IGNORECASE),
+    re.compile(r'(?:filed\s+(?:a\s+)?(?:lawsuit|complaint|action)\s+against)\s+([\w\s,.&\'-]{3,60}?)(?:\s*[,.]|\s+(?:for|over|in|alleging))', re.IGNORECASE),
+    re.compile(r'settlement\s+with\s+([\w\s,.&\'-]{3,80}?)(?:\s*[,.])', re.IGNORECASE),
+    # "against [Company], a [place]-based" or "against [Company] for/over"
+    re.compile(r'(?:against)\s+([\w\s,.&\'-]{3,60}?)(?:\s*,\s*(?:a|an|the|who|which)|\s+(?:for|over|in|regarding|alleging))', re.IGNORECASE),
+    # Parenthetical company abbreviation: "U.S. Healthworks (USHW)"
+    re.compile(r'(?:settlement\s+with|against|lawsuit\s+against)\s+([\w\s.&\'-]{3,60}?)\s*\(([A-Z]{2,10})\)', re.IGNORECASE),
+    # "announced a lawsuit against [Company] for" in body text
+    re.compile(r'(?:announced\s+(?:a\s+)?(?:lawsuit|complaint|action|suit)\s+against)\s+([\w\s,.&\'-]{3,60}?)(?:\s+(?:for|over|in|regarding|alleging))', re.IGNORECASE),
+    # Sentencing context: "[Name] and [Name], were sentenced/convicted"
+    re.compile(r'(?:ringleaders?|leaders?|organizers?)\s+(?:of\s+the\s+scheme\s*,?\s*)([\w\s,.&\'-]{5,80}?)(?:\s*,\s*(?:were|was)\s+(?:sentenced|convicted))', re.IGNORECASE),
+    # "sued [Company]" in body
+    re.compile(r'\bsued\s+([\w\s,.&\'-]{3,60}?)(?:\s*[,.]|\s+(?:for|over|in|alleging|under))', re.IGNORECASE),
+    # "charges against [Company]" in body
+    re.compile(r'charges?\s+against\s+([\w\s,.&\'-]{3,60}?)(?:\s*[,.]|\s+(?:for|over|in|alleging|relating))', re.IGNORECASE),
+    # "lawsuit against [Company]" without "filed"
+    re.compile(r'(?:a\s+)?(?:lawsuit|action|suit|complaint)\s+against\s+([\w\s,.&\'-]{3,60}?)(?:\s*[,.]|\s+(?:for|over|in|alleging))', re.IGNORECASE),
+    # "[Company], Inc./LLC/Corp." — match company with legal suffix in first paragraphs
+    re.compile(r'(?:against|with|sued|suing|charging)\s+([\w\s,.&\'-]{3,50}?(?:Inc\.?|Corp\.?|LLC|L\.?L\.?C\.?|Ltd\.?|L\.?P\.?|Company|Corporation))', re.IGNORECASE),
+    # "investigation of/into [Company]" in body
+    re.compile(r'investigation\s+(?:of|into)\s+([\w\s,.&\'-]{3,60}?)(?:\s*[,.]|\s+(?:for|over|in|regarding|related))', re.IGNORECASE),
+]
+
+# Legal suffixes to help identify company names
+_LEGAL_SUFFIXES = re.compile(
+    r'\b(?:Inc\.?|Corp\.?|LLC|L\.?L\.?C\.?|Ltd\.?|L\.?P\.?|Co\.?|Company|Corporation|Group|Holdings)\b',
+    re.IGNORECASE,
+)
+
+
+def _fix_headline_spacing(headline: str) -> str:
+    """Fix missing spaces in headlines (e.g., TX soft-hyphen stripping).
+
+    Inserts a space before uppercase letters that follow lowercase letters
+    without a space, handling patterns like 'fromCVSand' → 'from CVS and'.
+    """
+    return re.sub(r'([a-z])([A-Z])', r'\1 \2', headline)
+
+
+def extract_defendants_from_headline(headline: str) -> list[str]:
+    """Extract defendant names from a press release headline."""
+    # Fix missing spaces (common in TX headlines from soft-hyphen stripping)
+    headline = _fix_headline_spacing(headline)
+
+    results = []
+    seen: set[str] = set()
+    for pattern in _HEADLINE_DEFENDANT_PATTERNS:
+        match = pattern.search(headline)
+        if match:
+            raw_name = match.group(1).strip().rstrip(",.")
+            # Split on " and " to handle "Purdue Pharma and the Sackler Family"
+            parts = re.split(r'\s+and\s+(?:the\s+)?', raw_name)
+            for part in parts:
+                part = part.strip().rstrip(",.")
+                if not _is_valid_defendant_name(part):
+                    continue
+                if part.lower() not in seen:
+                    seen.add(part.lower())
+                    results.append(part)
+    return results
+
+
+def extract_defendants_from_body(text: str, max_chars: int = 1000) -> list[str]:
+    """Extract defendant names from press release body text.
+
+    Scans the first `max_chars` characters (first 2-3 paragraphs).
+    AG press releases almost always name defendants in the opening paragraphs.
+    """
+    # Restrict to opening paragraph(s) only
+    search_text = text[:max_chars]
+
+    results = []
+    seen: set[str] = set()
+
+    for pattern in _BODY_DEFENDANT_PATTERNS:
+        for match in pattern.finditer(search_text):
+            raw_name = match.group(1).strip().rstrip(",.")
+            # Split on " and " to handle multiple defendants in one match
+            parts = re.split(r'\s+and\s+', raw_name)
+            for name in parts:
+                name = name.strip().rstrip(",.")
+                if not _is_valid_defendant_name(name):
+                    continue
+                name_lower = name.lower()
+                if name_lower not in seen:
+                    seen.add(name_lower)
+                    results.append(name)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Action Type Classification
+# ---------------------------------------------------------------------------
+
+_ACTION_TYPE_PATTERNS = [
+    # --- Consent decree (check before settlement since "consent" could partial-match) ---
+    ("consent_decree", re.compile(r'\bconsent\s+(?:decree|order|agreement)\b', re.IGNORECASE)),
+
+    # --- Assurance of discontinuance ---
+    ("assurance_of_discontinuance", re.compile(r'\b(?:assurance\s+of\s+(?:discontinuance|voluntary\s+compliance)|AOD)\b', re.IGNORECASE)),
+
+    # --- Settlement (broad — most common resolution type) ---
+    ("settlement", re.compile(
+        r'\b(?:settl(?:ed|ement|es|ing)|agrees?\s+to\s+pay|agreed\s+to\s+pay|'
+        r'reaches?\s+agreement|reached\s+agreement|resolves?|resolved|'
+        r'pays?\s+fine|paid\s+fine|pays?\s+penalty|'
+        r'consent\s+judgment|recover(?:s|ed|y|ies)|'
+        r'secures?\s+\$|obtains?\s+\$|wins?\s+\$)\b', re.IGNORECASE)),
+
+    # --- Judgment / criminal resolution ---
+    ("judgment", re.compile(
+        r'\b(?:judgment|verdict|sentenced|sentencing|convicted|conviction|'
+        r'pleads?\s+guilty|pled\s+guilty|guilty\s+plea|guilty\s+verdict|'
+        r'found\s+(?:guilty|liable)|court\s+orders?|jury\s+(?:verdict|finds?))\b', re.IGNORECASE)),
+
+    # --- Injunction ---
+    ("injunction", re.compile(
+        r'\b(?:injunction|restraining\s+order|cease\s+and\s+desist|'
+        r'banned?\s+from|temporarily\s+blocked|preliminary\s+injunction|'
+        r'permanent\s+injunction)\b', re.IGNORECASE)),
+
+    # --- Lawsuit filed (check after settlement — a "settlement" headline is more specific) ---
+    ("lawsuit_filed", re.compile(
+        r'\b(?:(?:files?|filed)\s+(?:a\s+)?(?:lawsuit|complaint|action|suit|litigation)|'
+        r'announces?\s+(?:a\s+)?(?:lawsuit|complaint|suit|litigation)|'
+        r'brings?\s+(?:a\s+)?(?:action|charges?|suit|complaint)|'
+        r'(?:takes?|took)\s+legal\s+action|'
+        r'charges?\s+\w+\s+with|'
+        r'sues?)\b', re.IGNORECASE)),
+]
+
+
+def classify_action_type(headline: str, body_text: str) -> str:
+    """Classify the enforcement action type based on headline and body text.
+
+    Checks headline first (stronger signal), then body text.
+    Returns the ActionType value string.
+    """
+    # Check headline first — it's the strongest signal
+    for action_type, pattern in _ACTION_TYPE_PATTERNS:
+        if pattern.search(headline):
+            return action_type
+
+    # Fall back to body text
+    for action_type, pattern in _ACTION_TYPE_PATTERNS:
+        if pattern.search(body_text[:1000]):  # Only check first 1000 chars
+            return action_type
+
+    return "other"
+
+
+# ---------------------------------------------------------------------------
+# Multistate Detection
+# ---------------------------------------------------------------------------
+
+_MULTISTATE_PATTERNS = [
+    re.compile(r'\bmultistate\b', re.IGNORECASE),
+    re.compile(r'\bcoalition\s+of\s+(?:\d+\s+)?(?:state|attorney)', re.IGNORECASE),
+    re.compile(r'\b(\d+)\s+state(?:s)?\s+(?:attorneys?\s+general|AGs?)\b', re.IGNORECASE),
+    re.compile(r'\b(?:bipartisan|nationwide)\s+(?:coalition|group|states?)\b', re.IGNORECASE),
+    re.compile(r'\bjoined?\s+(?:by\s+)?\d+\s+(?:other\s+)?state', re.IGNORECASE),
+    # "attorneys general of [State], [State], ..." — listing 3+ states
+    re.compile(r'attorneys?\s+general\s+of\s+(?:\w+(?:\s+\w+)?,?\s+){3,}', re.IGNORECASE),
+    # "States Negotiating Committee" (used in multistate settlements like Purdue)
+    re.compile(r'\bstates?\s+negotiating\s+committee\b', re.IGNORECASE),
+    # Joining + listing of states
+    re.compile(r'\bjoining\s+attorney\s+general\b.*\battorneys?\s+general\s+of\b', re.IGNORECASE | re.DOTALL),
+]
+
+
+def is_multistate_action(headline: str, body_text: str) -> bool:
+    """Detect whether this is a multistate enforcement action."""
+    combined = headline + " " + body_text[:2000]
+    return any(p.search(combined) for p in _MULTISTATE_PATTERNS)
