@@ -6,7 +6,7 @@ Uses Click for command parsing and Rich for output formatting.
 import asyncio
 import logging
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import click
@@ -180,7 +180,7 @@ async def _scrape_state(
         with db.get_session() as session:
             db_run = session.get(ScrapeRun, run_id)
             if db_run:
-                db_run.completed_at = datetime.utcnow()
+                db_run.completed_at = datetime.now(timezone.utc)
                 db_run.press_releases_found = len(items)
                 db_run.actions_extracted = stored
                 db_run.errors = errors
@@ -421,13 +421,13 @@ def extract(ctx, state_code, extract_all, reprocess):
                                     confidence=vc.confidence,
                                 ))
 
-                        # Store monetary terms
-                        if result.monetary_terms:
-                            session.execute(
-                                delete(MonetaryTerms).where(
-                                    MonetaryTerms.action_id == action.id
-                                )
+                        # Store monetary terms (always clear old ones first)
+                        session.execute(
+                            delete(MonetaryTerms).where(
+                                MonetaryTerms.action_id == action.id
                             )
+                        )
+                        if result.monetary_terms:
                             mt = result.monetary_terms
                             session.add(MonetaryTerms(
                                 action_id=action.id,
@@ -438,13 +438,13 @@ def extract(ctx, state_code, extract_all, reprocess):
                                 amount_is_estimated=mt.amount_is_estimated,
                             ))
 
-                        # Store statute citations
-                        if result.statutes_cited:
-                            session.execute(
-                                delete(StatuteCited).where(
-                                    StatuteCited.action_id == action.id
-                                )
+                        # Store statute citations (always clear old ones first)
+                        session.execute(
+                            delete(StatuteCited).where(
+                                StatuteCited.action_id == action.id
                             )
+                        )
+                        if result.statutes_cited:
                             for sc in result.statutes_cited:
                                 session.add(StatuteCited(
                                     action_id=action.id,
@@ -558,8 +558,9 @@ def dashboard(port):
     import subprocess
     dashboard_path = Path(__file__).parent / "dashboard" / "app.py"
     console.print(f"Launching dashboard at [cyan]http://localhost:{port}[/cyan]")
+    import sys
     subprocess.run(
-        ["streamlit", "run", str(dashboard_path), "--server.port", str(port)],
+        [sys.executable, "-m", "streamlit", "run", str(dashboard_path), "--server.port", str(port)],
         check=True,
     )
 

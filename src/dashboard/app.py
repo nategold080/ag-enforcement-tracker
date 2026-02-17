@@ -15,7 +15,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from sqlalchemy import select, func, desc, distinct, and_
+from sqlalchemy import select, func, desc, distinct, and_, Integer
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -122,6 +122,7 @@ def load_actions_df() -> pd.DataFrame:
                 "action_type": a.action_type,
                 "headline": a.headline,
                 "source_url": a.source_url,
+                "is_multistate": bool(a.is_multistate),
             })
 
     return pd.DataFrame(rows) if rows else pd.DataFrame()
@@ -139,6 +140,7 @@ def load_monetary_df() -> pd.DataFrame:
                 EnforcementAction.headline,
                 MonetaryTerms.total_amount,
                 MonetaryTerms.amount_is_estimated,
+                EnforcementAction.is_multistate,
             )
             .join(MonetaryTerms)
             .where(
@@ -153,8 +155,58 @@ def load_monetary_df() -> pd.DataFrame:
 
         return pd.DataFrame(
             [{"id": r[0], "state": r[1], "date": r[2], "headline": r[3],
-              "amount": float(r[4]), "is_estimated": r[5]} for r in rows]
+              "amount": float(r[4]), "is_estimated": r[5],
+              "is_multistate": bool(r[6])} for r in rows]
         ) if rows else pd.DataFrame()
+
+
+def _dedup_settlements(df: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
+    """Deduplicate multistate settlements by grouping on similar amounts and dates.
+
+    Since multistate_action_id is not populated, we group settlements with the
+    same dollar amount that appear from multiple states within ~1 year.
+    Returns one row per unique settlement with state count.
+    """
+    if df.empty:
+        return df
+
+    df = df.sort_values("amount", ascending=False).copy()
+    df["date"] = pd.to_datetime(df["date"])
+
+    groups: list[dict] = []
+    used = set()
+
+    for idx, row in df.iterrows():
+        if idx in used:
+            continue
+
+        amt = row["amount"]
+        dt = row["date"]
+
+        # Find all rows with same amount (within 1%) and dates within 365 days
+        mask = (
+            (~df.index.isin(used)) &
+            (df["amount"].between(amt * 0.99, amt * 1.01)) &
+            ((df["date"] - dt).abs() <= pd.Timedelta(days=365))
+        )
+        cluster = df[mask]
+
+        states = sorted(cluster["state"].unique())
+        used.update(cluster.index)
+
+        groups.append({
+            "headline": row["headline"],
+            "amount": amt,
+            "date": dt,
+            "state": ", ".join(states) if len(states) > 1 else states[0],
+            "state_count": len(states),
+            "is_multistate": len(states) > 1 or row.get("is_multistate", False),
+        })
+
+        if len(groups) >= top_n:
+            break
+
+    return pd.DataFrame(groups)
 
 
 @st.cache_data(ttl=120)
@@ -281,6 +333,40 @@ def load_multistate_df() -> pd.DataFrame:
             })
 
     return pd.DataFrame(data) if data else pd.DataFrame()
+
+
+@st.cache_data(ttl=120)
+def load_coverage_df() -> pd.DataFrame:
+    """Load per-state data coverage stats."""
+    db = get_database()
+    with db.get_session() as session:
+        rows = session.execute(
+            select(
+                EnforcementAction.state,
+                func.count().label("total_scraped"),
+                func.sum(
+                    func.cast(
+                        EnforcementAction.quality_score > MIN_QUALITY,
+                        Integer,
+                    )
+                ).label("active"),
+                func.min(EnforcementAction.date_announced).label("earliest"),
+                func.max(EnforcementAction.date_announced).label("latest"),
+            )
+            .group_by(EnforcementAction.state)
+            .order_by(desc("active"))
+        ).all()
+
+        return pd.DataFrame(
+            [{
+                "State": STATE_NAMES.get(r[0], r[0]),
+                "Code": r[0],
+                "Total Scraped": r[1],
+                "Active Records": r[2] or 0,
+                "Earliest": r[3],
+                "Latest": r[4],
+            } for r in rows]
+        ) if rows else pd.DataFrame()
 
 
 @st.cache_data(ttl=120)
@@ -417,11 +503,6 @@ def main():
         '<p class="main-title">State AG Enforcement Tracker</p>',
         unsafe_allow_html=True,
     )
-    st.markdown(
-        '<p class="main-subtitle">5,700+ corporate enforcement actions across 8 states &mdash; structured, searchable, and ready for analysis</p>',
-        unsafe_allow_html=True,
-    )
-
     # ── Load data ──────────────────────────────────────────────────────
     actions_df = load_actions_df()
     monetary_df = load_monetary_df()
@@ -429,28 +510,45 @@ def main():
     defendants_df = load_defendants_df()
     multistate_df = load_multistate_df()
     search_data = load_company_search_data()
+    coverage_df = load_coverage_df()
 
     if actions_df.empty:
         st.warning("No data loaded. Run the scrape and extract pipeline first.")
         return
 
-    # ── KPI Row ────────────────────────────────────────────────────────
-    k1, k2, k3, k4 = st.columns(4)
-
     total_actions = len(actions_df)
     total_states = actions_df["state"].nunique()
-    settlement_records = len(monetary_df[monetary_df["amount"] > 0]) if not monetary_df.empty else 0
+    total_defendants = len(defendants_df) if not defendants_df.empty else 0
     date_min = actions_df["date"].min()
     date_max = actions_df["date"].max()
+
+    # Compute total settlements (cap individual records at $30B for display sanity)
+    if not monetary_df.empty:
+        capped = monetary_df["amount"].clip(upper=30e9)
+        total_settlements_val = capped.sum()
+    else:
+        total_settlements_val = 0
+
+    st.markdown(
+        f'<p class="main-subtitle">{total_actions:,} enforcement actions across {total_states} states, '
+        f'tracking {total_defendants:,} defendants &mdash; structured, searchable, and ready for analysis</p>',
+        unsafe_allow_html=True,
+    )
+
+    # ── KPI Row ────────────────────────────────────────────────────────
+    k1, k2, k3, k4 = st.columns(4)
 
     with k1:
         st.metric("Enforcement Actions", f"{total_actions:,}")
     with k2:
         st.metric("States Tracked", f"{total_states}")
     with k3:
-        st.metric("Settlements Identified", f"{settlement_records:,}")
+        if total_settlements_val >= 1e9:
+            st.metric("Total Settlements", f"${total_settlements_val / 1e9:.1f}B")
+        else:
+            st.metric("Total Settlements", f"${total_settlements_val / 1e6:.0f}M")
     with k4:
-        st.metric("Date Range", f"{date_min.year}–{date_max.year}")
+        st.metric("Date Range", f"{date_min.year}\u2013{date_max.year}")
 
     st.markdown("")  # spacer
 
@@ -549,6 +647,87 @@ def main():
                 height=min(total_matches * 36 + 40, 400),
             )
 
+    # ── Largest Settlements (deduplicated) ─────────────────────────────
+    st.markdown(
+        '<p class="section-header">Largest Settlements</p>',
+        unsafe_allow_html=True,
+    )
+    st.caption("Top 10 unique settlements — multistate actions shown once with participating state count")
+
+    if not monetary_df.empty:
+        top_settlements = _dedup_settlements(monetary_df, top_n=10)
+        if not top_settlements.empty:
+            display_settle = top_settlements.copy()
+            display_settle["Amount"] = display_settle["amount"].apply(
+                lambda x: f"${x / 1e9:.1f}B" if x >= 1e9 else (f"${x / 1e6:.1f}M" if x >= 1e6 else f"${x:,.0f}")
+            )
+            display_settle["Date"] = pd.to_datetime(display_settle["date"]).dt.strftime("%Y-%m-%d")
+            display_settle["Scope"] = display_settle.apply(
+                lambda r: f"{r['state_count']}-state multistate" if r["state_count"] > 1
+                else ("Multistate" if r["is_multistate"] else r["state"]),
+                axis=1,
+            )
+            display_settle["Headline"] = display_settle["headline"].str[:80]
+
+            st.dataframe(
+                display_settle[["Date", "Scope", "Headline", "Amount"]],
+                use_container_width=True,
+                hide_index=True,
+                height=min(len(display_settle) * 36 + 40, 420),
+                column_config={
+                    "Date": st.column_config.TextColumn("Date", width="small"),
+                    "Scope": st.column_config.TextColumn("Scope", width="small"),
+                    "Headline": st.column_config.TextColumn("Headline", width="large"),
+                    "Amount": st.column_config.TextColumn("Amount", width="small"),
+                },
+            )
+
+    st.markdown("")
+
+    # ── Recent Actions Feed ──────────────────────────────────────────
+    st.markdown(
+        '<p class="section-header">Recent Enforcement Actions</p>',
+        unsafe_allow_html=True,
+    )
+    st.caption("The 20 most recent enforcement actions in the dataset")
+
+    recent_df = actions_df.nlargest(20, "date").copy()
+    if not recent_df.empty:
+        # Join with monetary data for amounts
+        if not monetary_df.empty:
+            recent_with_amt = recent_df.merge(
+                monetary_df[["id", "amount"]],
+                on="id", how="left",
+            )
+        else:
+            recent_with_amt = recent_df.copy()
+            recent_with_amt["amount"] = None
+
+        recent_with_amt["date_display"] = pd.to_datetime(recent_with_amt["date"]).dt.strftime("%Y-%m-%d")
+        recent_with_amt["type_display"] = recent_with_amt.apply(
+            lambda r: ("[Multistate] " if r.get("is_multistate") else "")
+            + ACTION_TYPE_DISPLAY.get(r["action_type"], r["action_type"].replace("_", " ").title()),
+            axis=1,
+        )
+        recent_with_amt["amount_display"] = recent_with_amt["amount"].apply(
+            lambda x: f"${x / 1e6:.1f}M" if x and x >= 1e6 else (f"${x:,.0f}" if x and x > 0 else "\u2014")
+        )
+
+        st.dataframe(
+            recent_with_amt[["date_display", "state", "type_display", "headline", "amount_display"]].rename(
+                columns={
+                    "date_display": "Date",
+                    "state": "State",
+                    "type_display": "Type",
+                    "headline": "Headline",
+                    "amount_display": "Amount",
+                }
+            ),
+            use_container_width=True,
+            hide_index=True,
+            height=min(20 * 36 + 40, 520),
+        )
+
     st.markdown("")
 
     # ── Row: State Map + Category Breakdown ────────────────────────────
@@ -634,11 +813,11 @@ def main():
 
     with trend_col:
         st.markdown(
-            '<p class="section-header">Category Trends (2022–2025)</p>',
+            '<p class="section-header">Category Trends (2022\u20132026)</p>',
             unsafe_allow_html=True,
         )
         if not categories_df.empty:
-            trend_df = categories_df[categories_df["year"].between(2022, 2025)]
+            trend_df = categories_df[categories_df["year"].between(2022, 2026)]
             top_cats = trend_df["category"].value_counts().head(6).index.tolist()
             trend_filtered = trend_df[trend_df["category"].isin(top_cats)]
 
@@ -737,6 +916,100 @@ def main():
             yaxis=dict(title=""),
         )
         st.plotly_chart(fig_defs, use_container_width=True)
+
+    # ── Data Coverage ────────────────────────────────────────────────
+    st.markdown(
+        '<p class="section-header">Data Coverage</p>',
+        unsafe_allow_html=True,
+    )
+
+    cov_col1, cov_col2 = st.columns([3, 2])
+
+    with cov_col1:
+        if not coverage_df.empty:
+            display_cov = coverage_df.copy()
+            # Only show states with active records
+            display_cov = display_cov[display_cov["Active Records"] > 10].copy()
+            display_cov["Date Range"] = display_cov.apply(
+                lambda r: f"{r['Earliest'].strftime('%b %Y') if r['Earliest'] else '—'} – {r['Latest'].strftime('%b %Y') if r['Latest'] else '—'}",
+                axis=1,
+            )
+            display_cov["Filter Rate"] = display_cov.apply(
+                lambda r: f"{(1 - r['Active Records'] / r['Total Scraped']) * 100:.0f}%" if r["Total Scraped"] > 0 else "—",
+                axis=1,
+            )
+            st.dataframe(
+                display_cov[["State", "Code", "Active Records", "Total Scraped", "Date Range", "Filter Rate"]],
+                use_container_width=True,
+                hide_index=True,
+                height=min(len(display_cov) * 36 + 40, 400),
+                column_config={
+                    "State": st.column_config.TextColumn("State", width="medium"),
+                    "Code": st.column_config.TextColumn("Code", width="small"),
+                    "Active Records": st.column_config.NumberColumn("Enforcement Actions", format="%d"),
+                    "Total Scraped": st.column_config.NumberColumn("Total Scraped", format="%d"),
+                    "Date Range": st.column_config.TextColumn("Date Range", width="medium"),
+                    "Filter Rate": st.column_config.TextColumn("Filter Rate", width="small"),
+                },
+            )
+
+    with cov_col2:
+        st.markdown("""
+**Coverage is actively expanding.** The tracker currently covers **{n_states} states** with
+full scraping and extraction pipelines. Each state's AG website has a unique
+structure requiring custom scraper configuration.
+
+**What "Filter Rate" means:** Not all AG press releases are enforcement
+actions — AGs also publish consumer alerts, policy statements, personnel
+announcements, and legislative commentary. Our two-stage filter
+(keyword screen + pattern validation) removes non-enforcement content.
+A higher filter rate indicates more non-enforcement content on that state's website.
+
+**Active coverage:** CA, NY, TX, WA, MA, OH, OR — representing the largest
+and most active AG offices in the country. Additional states are being
+onboarded continuously.
+""".format(n_states=total_states))
+
+    st.markdown("")
+
+    # ── About / Methodology ──────────────────────────────────────────
+    with st.expander("About This Data / Methodology", expanded=False):
+        st.markdown("""
+### How It Works
+
+The AG Enforcement Tracker uses a fully automated pipeline to collect, extract, and
+structure enforcement action data from state Attorney General press releases:
+
+1. **Scrape** — Custom scrapers collect press releases from each state AG's website,
+   respecting rate limits and `robots.txt`.
+2. **Filter** — A two-stage classifier (keyword screen + pattern validation) separates
+   genuine enforcement actions from consumer alerts, policy statements, and other content.
+3. **Extract** — Rule-based regex extractors pull structured fields: settlement amounts,
+   defendant names, action types, statute citations, and dates. **No LLM is used** for
+   core extraction — deterministic rules ensure consistency across thousands of records.
+4. **Normalize** — Company names are resolved to canonical forms (e.g., "Google LLC",
+   "Google, Inc." → "Google"). Violations are classified into a standard taxonomy.
+5. **Score** — Each record receives a quality score (0.0–1.0) based on extraction
+   confidence. Records below 0.1 are excluded from the active dataset.
+
+### Data Quality
+
+- **Action type classification accuracy:** ~88% of records are classified into specific
+  action types (settlement, lawsuit filed, judgment, injunction, consent decree)
+- **Entity resolution:** Major companies are tracked across all states where they appear
+- **Coverage period:** 2022–present for most states (WA and TX have deeper historical archives)
+- **Update frequency:** Designed for daily automated scraping
+
+### Limitations
+
+- Coverage is currently limited to {n_states} states. Expanding to all 50 is planned.
+- Settlement amounts reflect values stated in press releases, which may differ from
+  final negotiated amounts.
+- Some multistate actions appear multiple times (once per participating state);
+  deduplication links them but totals should be interpreted carefully.
+- ~12% of records remain classified as "other" action type when headlines/body text
+  don't match specific enforcement patterns.
+""".format(n_states=total_states))
 
     # ── Footer ─────────────────────────────────────────────────────────
     st.markdown("")

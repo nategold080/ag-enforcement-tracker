@@ -37,6 +37,162 @@ _LEGAL_SUFFIXES = re.compile(
 # Articles and filler to strip from the start
 _LEADING_ARTICLES = re.compile(r'^(The|A|An)\s+', re.IGNORECASE)
 
+# Trailing sentence fragments that get captured as part of defendant names
+# during body-text extraction — truncate the name before these patterns
+_TRAILING_FRAGMENTS = re.compile(
+    r'\s*(?:'
+    r'(?:claiming|alleging|asserting|accusing|contending)\s+(?:that|the)|'
+    r'(?:regarding|over\s+the|for\s+(?:violating|illegally|deceptive|failing))|'
+    r'(?:is\s+scheduled|has\s+now\s+been|today|to\s+hold\s+the)|'
+    r'(?:secured\s+by|resulting|the\s+parent|to\s+(?:inc|move))|'
+    r'(?:,?\s+with\s+a\s+u\.s\.)|'
+    r'(?:\.\s+(?:Filed|The\s+states|The\s+money))'
+    r').*$',
+    re.IGNORECASE,
+)
+
+# Leading descriptive phrases to strip (e.g., "technology giant Google")
+_LEADING_DESCRIPTORS = re.compile(
+    r'^(?:technology\s+giant|internet\s+giant|pharmaceutical\s+(?:giant|manufacturer)|'
+    r'opioid\s+manufacturer|oxycontin\s+maker|drug\s+manufacturers?|'
+    r'e-?cigarette\s+(?:maker|company)|electronic\s+cigarette\s+maker,?\s*'
+    r')\s*',
+    re.IGNORECASE,
+)
+
+
+# ---------------------------------------------------------------------------
+# Canonical-name validation — reject garbage after cleaning
+# ---------------------------------------------------------------------------
+
+_ENTITY_STOPWORDS = frozenset({
+    # Pronouns / determiners / articles
+    "a", "an", "the", "his", "her", "its", "that", "this", "them", "they",
+    "it", "he", "she", "we", "us", "me", "my", "our", "your", "their",
+    "who", "what", "which", "where", "when", "how", "there", "here",
+    # Common short words
+    "all", "any", "new", "one", "two", "three", "four", "five", "six",
+    "each", "than", "then", "also", "just", "like", "over", "only",
+    "many", "some", "such", "more", "most", "very", "much", "well",
+    "back", "into", "with", "from", "about", "will", "or", "if", "so",
+    "no", "not", "but", "yet", "do", "can", "may", "shall",
+    # Verbs / modals
+    "be", "been", "being", "am", "is", "are", "was", "were",
+    "have", "has", "had", "having", "get", "got", "did", "would",
+    "could", "should", "must", "make", "made", "take", "took",
+    "give", "gave", "keep", "kept", "let", "say", "said", "use",
+    "run", "ran",
+    # Generic descriptors that aren't entity names
+    "business", "company", "nation", "office", "help",
+    "complete", "election", "investigation", "discrimination",
+    "travel", "pharmaceutical", "operating", "major", "other",
+    "former", "another", "several", "act", "law", "court", "state",
+    "federal", "child", "children", "people", "person",
+    "real estate", "seller",
+})
+
+# Patterns that indicate a "name" is actually a sentence fragment or not a defendant
+_GARBAGE_NAME_PATTERNS = [
+    # Starts with lowercase (except brand-convention names like eBay, iPhone)
+    re.compile(r'^[a-z](?!bay|phone|pod|tunes)'),
+    # "Death of X" — investigation subjects, not defendants
+    re.compile(r'^death\s+of\b', re.IGNORECASE),
+    # Government entities — not defendants in AG enforcement
+    re.compile(r'(?:attorney.?s?\s+general|attorneys\s+general|district\s+attorney)',
+               re.IGNORECASE),
+    re.compile(r'(?:trump|biden|obama)\s+(?:administration|era)',
+               re.IGNORECASE),
+    re.compile(r'^(?:president\s+(?:trump|biden|donald))\b', re.IGNORECASE),
+    re.compile(r'(?:department\s+of|secretary\s+of|u\.?s\.?\s+(?:supreme|district|department))',
+               re.IGNORECASE),
+    re.compile(r'^\d+\s+(?:state\s+)?attorneys?\s+general\b', re.IGNORECASE),
+    # Government agency tail fragments (from "and"-split of multi-word names)
+    re.compile(r'^(?:drug|highway|transit|veterans?)\s+administration\b', re.IGNORECASE),
+    re.compile(r'^homeland\s+security\b', re.IGNORECASE),
+    # Ends with government body suffix (standalone fragment)
+    re.compile(r'\b(?:commission|bureau|department)\s*$', re.IGNORECASE),
+    # Law name fragments — "Women Act", "Disabilities Act"
+    re.compile(r'\b(?:women|disabilities|privacy|recovery|clean\s+(?:air|water))\s+act\b',
+               re.IGNORECASE),
+    # Generic industry role descriptors (including "N drug makers", "generic drug makers")
+    re.compile(r'(?:^|\b)(?:drug|opioid|pharmaceutical|tobacco|e-?cigarette|generic)\s+'
+               r'(?:maker|manufacturer|distributor|company|companies)s?\b', re.IGNORECASE),
+    # Count-word at start — almost always a count phrase, not a company name.
+    # Protects known companies: "Nine West", "Five Guys", "Three Rivers", "Six Flags"
+    re.compile(r'^(?:two|three|four|five|six|seven|eight|ten)\s+'
+               r'(?!west\b|guys\b|rivers?\b|flags?\b|star\b|point\b)',
+               re.IGNORECASE),
+    # "Food & Drug Administration" / "Food and Drug Administration" — the FDA
+    re.compile(r'\bfood\s+(?:&|and)\s+drug\s+administration\b', re.IGNORECASE),
+    # "Settlement With N" pattern
+    re.compile(r'^settlement\s+with\b', re.IGNORECASE),
+    # Police departments
+    re.compile(r'\bpolice\s+department\b', re.IGNORECASE),
+    # "Press Release AG..." headlines captured as names
+    re.compile(r'^press\s+release\b', re.IGNORECASE),
+    # "Acting [Title]" captured as a name
+    re.compile(r'^acting\s+(?:tax|attorney|district|commissioner)', re.IGNORECASE),
+    # "N things" — count phrases, not entity names
+    re.compile(r'^\d+\s+(?:states?|individuals?|defendants?|companies|businesses|'
+               r'officers?|suspects?|felonies|producers?|pharmacies|drug\s+makers|'
+               r'other\s+sta)',
+               re.IGNORECASE),
+    # Fragment verbs in the name
+    re.compile(r'\b(?:claiming|alleging|saying|stating|arguing|asserting|'
+               r'accusing|contending|opposing|demanding|requesting|'
+               r'attempting|resulting|announcing|filed|scheduled|'
+               r'according|beginning|providing)\b', re.IGNORECASE),
+    # "to [verb]" fragments (e.g., "to Protect Workers")
+    re.compile(r'\bto\s+(?:protect|block|stop|prevent|hold|ensure|support|'
+               r'help|combat|fight|halt|reform|end|strike|address|'
+               r'require|prohibit|investigate|crack|avoid|enforce)\b',
+               re.IGNORECASE),
+    # Starts with pronoun + noun ("His companies", "Its subsidiaries")
+    re.compile(r'^(?:his|her|its|their)\s+', re.IGNORECASE),
+    # "Consumer Alert" captured as defendant
+    re.compile(r'^consumer\s+alert\b', re.IGNORECASE),
+    # Year + report title patterns
+    re.compile(r'^20\d{2}\s+(?:capital|health|annual|cost|data)', re.IGNORECASE),
+    # Comma followed by sentence fragment ("Google, claiming that")
+    re.compile(r',\s+(?:the|a|an|with|for|that|which|who|in|on|to|its|his|her|'
+               r'claiming|alleging|accusing|asserting|but|and\s+the)\s',
+               re.IGNORECASE),
+    # "Amicus Brief" / "Brief Joined By"
+    re.compile(r'amicus\s+brief|brief\s+joined\s+by', re.IGNORECASE),
+    # "Battleground States", "States on Behalf of"
+    re.compile(r'(?:battleground|on\s+behalf\s+of)\s+', re.IGNORECASE),
+]
+
+
+def is_valid_canonical_name(name: str) -> bool:
+    """Check whether a cleaned canonical name looks like a real entity.
+
+    Returns False for stopwords, sentence fragments, government entities,
+    investigation subjects, and other garbage that should not be a
+    canonical defendant name.
+    """
+    if not name or len(name) < 2:
+        return False
+
+    # Single word under 3 chars (but allow "3M", "BP", "HP")
+    if len(name) < 3 and not re.match(r'^[A-Z0-9]{2,3}$', name):
+        return False
+
+    # Exact stopword match
+    if name.lower().strip() in _ENTITY_STOPWORDS:
+        return False
+
+    # Regex patterns
+    for pat in _GARBAGE_NAME_PATTERNS:
+        if pat.search(name):
+            return False
+
+    # Pure numbers
+    if re.match(r'^\d+$', name.strip()):
+        return False
+
+    return True
+
 
 class EntityResolver:
     """Resolve raw company names to canonical forms.
@@ -92,7 +248,12 @@ class EntityResolver:
         """
         cleaned = self.clean_name(raw_name)
         if not cleaned:
-            return raw_name.strip(), 0.0
+            return "", 0.0
+
+        # Step 0: Validate the cleaned name is a real entity, not garbage
+        if not is_valid_canonical_name(cleaned):
+            logger.debug("Rejected garbage name: %r (cleaned: %r)", raw_name, cleaned)
+            return "", 0.0
 
         # Step 1: Check known aliases (exact match on cleaned name)
         alias_key = cleaned.lower()
@@ -143,6 +304,12 @@ class EntityResolver:
         name = raw.strip()
         if not name:
             return ""
+
+        # Strip trailing sentence fragments first (before other cleaning)
+        name = _TRAILING_FRAGMENTS.sub("", name).strip().rstrip(",.")
+
+        # Strip leading descriptive phrases ("technology giant Google" → "Google")
+        name = _LEADING_DESCRIPTORS.sub("", name).strip()
 
         # Strip leading articles
         name = _LEADING_ARTICLES.sub("", name)

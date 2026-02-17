@@ -115,6 +115,20 @@ _NON_ENFORCEMENT_KEYWORDS = [
     "applauds",
     "commends",
     "welcomes",
+    "encourages students",
+    "high school students",
+    "teen ambassador",
+    "conceal carry",
+    "concealed carry",
+    "peace officer",
+    "fallen officer",
+    "gun buyback",
+    "open carry",
+    "legal explainer",
+    "legal analysis",
+    "provides update",
+    "provides statement",
+    "solicitor general",
 ]
 
 
@@ -134,6 +148,73 @@ _HEADLINE_NON_ENFORCEMENT_RE = [
     re.compile(r'(?:applauds?|commends?|welcomes?|praises?)\s+', re.IGNORECASE),
     re.compile(r'(?:comment|letter)\s+(?:to|on|regarding)\s+', re.IGNORECASE),
     re.compile(r'(?:heritage|awareness)\s+month', re.IGNORECASE),
+    re.compile(r'(?:honors?|mourns?|remembers?|salutes?)\s+(?:fallen|slain)', re.IGNORECASE),
+    re.compile(r'statement\s+on\s+(?:passing|death|fallen|shooting)', re.IGNORECASE),
+    re.compile(r'(?:gun\s+buyback|guns?\s+turned\s+in)', re.IGNORECASE),
+    re.compile(r'(?:issues?\s+(?:legal\s+)?(?:opinion|advisory))\b', re.IGNORECASE),
+    re.compile(r'encourages?\s+(?:students|residents|high\s+school)', re.IGNORECASE),
+    re.compile(r'announces?\s+(?:appointment|tour|town\s+hall)', re.IGNORECASE),
+    re.compile(r'(?:kicks?\s+off|launches?)\s+(?:year|program|tour)', re.IGNORECASE),
+    # "Warns Against X" / "Warns [State Residents]" — consumer alerts, not enforcement
+    re.compile(r'warns?\s+(?:against|about|of\s+(?:potential|scam|fraud))\b', re.IGNORECASE),
+    re.compile(r'warns?\s+(?:new\s+yorkers|texans|californians|ohioans|oregonians|residents)\b', re.IGNORECASE),
+    # Statements and open letters (political/policy, not enforcement)
+    re.compile(r'(?:statement\s+(?:from|on)\b)', re.IGNORECASE),
+    re.compile(r'(?:issues?|releases?|publishes?)\s+(?:an?\s+)?open\s+letter\b', re.IGNORECASE),
+    # Amicus briefs with "joins/signs/files"
+    re.compile(r'(?:joins?|signs?|submits?|files?)\s+(?:an?\s+)?(?:amicus|friend.of.the.court)\s+brief', re.IGNORECASE),
+    # Advocacy — "leads/joins effort/brief supporting/opposing"
+    re.compile(r'(?:leads?|joins?)\s+(?:[\w\s-]+)?(?:effort|brief|letter)\s+(?:supporting|opposing|urging|calling)', re.IGNORECASE),
+    # Political criticism / opinion
+    re.compile(r'(?:condemns?|vows?\s+to|pledges?\s+to)\s+', re.IGNORECASE),
+    # Administrative / informational
+    re.compile(r'(?:holds?\s+(?:kickoff|meeting|convening|summit))\b', re.IGNORECASE),
+    re.compile(r'(?:seeks?\s+(?:students|volunteers|applicants|high.school))\b', re.IGNORECASE),
+    re.compile(r'(?:invites?\s+(?:students|ohio|high.school))\b', re.IGNORECASE),
+    re.compile(r'(?:application\s+deadline|apply\s+for)\b', re.IGNORECASE),
+    re.compile(r'(?:remembering|in\s+memory\s+of|legacy\s+of)\b', re.IGNORECASE),
+    # Policy-focused AG statements about federal actions
+    re.compile(r'(?:trump|biden)\s+administration.{0,20}s?\s+(?:illegal|unlawful|threatens?|attempt)', re.IGNORECASE),
+    re.compile(r'(?:to\s+consumers?:)', re.IGNORECASE),
+    re.compile(r'(?:issues?\s+(?:warning|legal\s+alert))\b', re.IGNORECASE),
+    re.compile(r'(?:focuses?\s+on|questions?$|has\s+questions$)', re.IGNORECASE),
+    # Reports, studies, data releases
+    re.compile(r'(?:study\s+shows|did\s+not\s+drive|change\s+in\s+(?:concealed|carry|law))\b', re.IGNORECASE),
+    re.compile(r'(?:releases?\s+(?:yellow\s+book|annual|20\d{2}))', re.IGNORECASE),
+    # Missing persons / BCI / non-enforcement AG office functions
+    re.compile(r'(?:age.progression|missing\s+(?:cleveland|man|woman|person|child)|identity\s+restored)', re.IGNORECASE),
+    re.compile(r'(?:peace\s+officers?\s+(?:memorial|basic\s+training|ceremony))\b', re.IGNORECASE),
+    re.compile(r'(?:concealed?\s+carry\s+report|conceal\s+carry\s+report)\b', re.IGNORECASE),
+    # Broad: AG as political actor, not enforcer
+    re.compile(r'(?:provides?\s+(?:legal\s+)?(?:analysis|update|explainer))\b', re.IGNORECASE),
+    re.compile(r'(?:announces?\s+pick\s+for|new\s+(?:solicitor|deputy|chief))\b', re.IGNORECASE),
+    re.compile(r'(?:preserves?\s+(?:its|california|ability))\b', re.IGNORECASE),
+    # Consumer alerts in headline override body enforcement keywords
+    re.compile(r'consumer\s+alert', re.IGNORECASE),
+    # "Alerts/Reminds [group]" — advisories
+    re.compile(r'(?:alerts?|reminds?)\s+(?:businesses|city\s+attorneys|consumers|residents|new\s+yorkers|texans|californians)', re.IGNORECASE),
+    # Guidance issuances
+    re.compile(r'(?:issues?|provides?|releases?)\s+(?:[\w\s]+)?(?:guidance|revised\s+(?:legal\s+)?guidance)', re.IGNORECASE),
+    # Advocacy coalitions (support/oppose policy, not enforcement)
+    re.compile(r'(?:leads?|joins?|co-?leads?)\s+(?:[\w\s-]+)?(?:coalition|effort|brief)\s+(?:[\w\s]+)?(?:support|oppos|urg|call|defend)', re.IGNORECASE),
+    # Personnel actions
+    re.compile(r'(?:names?\s+new|promotes?\s+|establishes?\s+)', re.IGNORECASE),
+    # Know your rights / informational
+    re.compile(r'(?:know\s+your\s+rights|remains?\s+in\s+effect|certif(?:y|ies)\s+(?:\d+\s+)?(?:initiative|petition))', re.IGNORECASE),
+    # "Bills to..." — legislation
+    re.compile(r'^bills?\s+to\b', re.IGNORECASE),
+    # "To Congress / To U.S. Supreme Court" (advocacy briefs)
+    re.compile(r'(?:to\s+(?:congress|u\.?s\.?\s+supreme\s+court):)', re.IGNORECASE),
+    # "Stands with" — political solidarity
+    re.compile(r'stands?\s+with\b', re.IGNORECASE),
+    # Voting / election protection
+    re.compile(r'(?:vote\s+early|voter\s+protection|election\s+integrity\s+law)', re.IGNORECASE),
+    # "It Remains Illegal to" — informational
+    re.compile(r'(?:remains?\s+illegal\s+to|it\s+remains?\s+illegal)', re.IGNORECASE),
+    # "Responds to Court Decision" (commentary, not AG's own action)
+    re.compile(r'responds?\s+to\s+(?:court|supreme|u\.?s\.?)', re.IGNORECASE),
+    # Puts on notice / on notice for (warning, not enforcement action)
+    re.compile(r'puts?\s+(?:[\w\s]+)?on\s+notice\b', re.IGNORECASE),
 ]
 
 

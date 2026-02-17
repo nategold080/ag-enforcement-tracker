@@ -101,39 +101,86 @@ _HEADLINE_DOLLAR_RE = re.compile(
 )
 
 
+_NON_SETTLEMENT_CONTEXT_RE = re.compile(
+    r'(?:grant|funding|appropriat|budget|federal\s+aid|allocat|'
+    r'CDC|HHS|FEMA|federal\s+funds?|tax\s+(?:relief|cut|credit|revenue)|'
+    r'government\s+(?:funding|spending)|legislative|'
+    r'executive\s+order|stimulus|infrastructure\s+(?:funding|investment)|'
+    r'seiz(?:ed?|ure|ing)|fentanyl|trafficking|narcotic|border|'
+    r'gross\s+domestic|GDP|economy|economic\s+(?:impact|growth|loss)|'
+    r'revenue|sales|market\s+(?:cap|value)|stock|share\s+price|'
+    r'annual\s+(?:revenue|budget|sales)|industry|sector)',
+    re.IGNORECASE,
+)
+
+
+def _is_non_settlement_context(text: str, match_start: int) -> bool:
+    """Check if a dollar amount is in a non-settlement context (grants, funding, etc.)."""
+    # Check 80 chars around the match
+    start = max(0, match_start - 80)
+    end = min(len(text), match_start + 80)
+    context = text[start:end]
+    return bool(_NON_SETTLEMENT_CONTEXT_RE.search(context))
+
+
 def extract_settlement_amount(headline: str, body: str) -> Optional[ExtractedAmount]:
     """Extract the most relevant settlement/penalty dollar amount.
 
     Priority:
     1. Dollar amount in the headline (strongest signal — editors put the key number there)
     2. Dollar amount near settlement/penalty keywords in body text
-    3. Fallback: largest dollar amount in body
+    3. Fallback: largest dollar amount in body (with contextual guards)
+
+    Filters out dollar amounts in non-settlement contexts (grants, funding, etc.).
     """
-    # Priority 1: Headline amount
+    # Universal sanity cap: no single AG enforcement action has exceeded $30B.
+    # The largest was the $26B opioid distributor settlement.
+    _MAX_SETTLEMENT = Decimal("30000000000")  # $30B
+
+    # Priority 1: Headline amount (but check for non-settlement context)
     headline_amounts = extract_dollar_amounts(headline)
     if headline_amounts:
-        return max(headline_amounts, key=lambda a: a.amount)
+        settlement_amounts = [
+            a for a in headline_amounts
+            if not _is_non_settlement_context(headline, headline.find(a.raw_text))
+            and a.amount <= _MAX_SETTLEMENT
+        ]
+        if settlement_amounts:
+            return max(settlement_amounts, key=lambda a: a.amount)
 
     # Priority 2: Amount in settlement context in body
     match = _SETTLEMENT_CONTEXT_RE.search(body)
     if match:
-        num_str = match.group(1).replace(",", "")
-        try:
-            value = Decimal(num_str)
-            multiplier_word = match.group(2)
-            if multiplier_word:
-                value *= _MULTIPLIERS.get(multiplier_word.lower(), Decimal("1"))
-            raw = match.group(0)
-            # Check for approximation language
-            start = max(0, match.start() - 40)
-            preceding = body[start:match.start()]
-            is_estimated = bool(_APPROX_RE.search(preceding))
-            return ExtractedAmount(raw_text=raw, amount=value, is_estimated=is_estimated)
-        except InvalidOperation:
-            pass
+        # Verify it's not in a grant/funding context
+        if not _is_non_settlement_context(body, match.start()):
+            num_str = match.group(1).replace(",", "")
+            try:
+                value = Decimal(num_str)
+                multiplier_word = match.group(2)
+                if multiplier_word:
+                    value *= _MULTIPLIERS.get(multiplier_word.lower(), Decimal("1"))
+                if value <= _MAX_SETTLEMENT:
+                    raw = match.group(0)
+                    start = max(0, match.start() - 40)
+                    preceding = body[start:match.start()]
+                    is_estimated = bool(_APPROX_RE.search(preceding))
+                    return ExtractedAmount(raw_text=raw, amount=value, is_estimated=is_estimated)
+            except InvalidOperation:
+                pass
 
-    # Priority 3: Fallback to largest amount in body
-    return extract_largest_dollar_amount(body)
+    # Priority 3: Fallback to largest amount in first 1500 chars of body only
+    body_head = body[:1500]
+    amounts = extract_dollar_amounts(body_head)
+    if not amounts:
+        return None
+    filtered = [
+        a for a in amounts
+        if not _is_non_settlement_context(body_head, body_head.find(a.raw_text))
+        and a.amount <= _MAX_SETTLEMENT
+    ]
+    if not filtered:
+        return None
+    return max(filtered, key=lambda a: a.amount)
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +464,46 @@ _DEFENDANT_BLOCKLIST = {
     "transgender", "predatory", "spread of nonconsensual",
     "members of the sackler family",
     "the walt disney company",  # will be resolved by entity resolution instead
+    # Government agency fragments (tails of multi-word proper nouns split on "and")
+    "drug administration",       # from "Food and Drug Administration"
+    "homeland security",         # from "Department of Homeland Security"
+    "women act",                 # from "Violence Against Women Act"
+    "disabilities act",          # from "Americans with Disabilities Act"
+    "drug manufacturers",
+    "drug companies",
+    "drug maker",
+    "drug manufacturer",
+    # Government bodies — never defendants in AG enforcement
+    "u.s. environmental protection agency",
+    "u.s. postal service",
+    "u.s. state department",
+    "u.s. labor department",
+    "u.s. bureau of land management",
+    "federal highway administration",
+    "federal communications commission",
+    "federal trade commission",
+    "federal emergency management agency",
+    "nuclear regulatory commission",
+    "equal employment opportunity commission",
+    "transportation commission",
+    "bureau of alcohol, tobacco, firearms",
+    "bureau of alcohol",
+    "social security",
+    "harris county commissioners court",
+    # Generic role descriptors (not specific company names)
+    "debt collection agency",
+    "online travel agency",
+    "staffing agency",
+    "state housing agency",
+    "mandatory poster agency",
+    "health agency",
+    "home health agency",
+    # Headlines/fragments that leak through as defendant names
+    "press release ag",
+    "acting tax commissioner",
+    "county school board",
+    "college board",
+    "high court",
 }
 
 # Additional blocklist patterns (regex-based for flexible matching)
@@ -437,6 +524,28 @@ _DEFENDANT_BLOCKLIST_PATTERNS = [
     re.compile(r'^\d+\s+(?:companies|businesses|firms|individuals|defendants)', re.IGNORECASE),
     # Generic role descriptions
     re.compile(r'^(?:federal|state|local)\s+(?:government|officials|agencies)', re.IGNORECASE),
+    # Government agency tail fragments (from "and"-splitting multi-word names)
+    re.compile(r'^(?:drug|highway|transit|veterans?)\s+administration\b', re.IGNORECASE),
+    re.compile(r'\b(?:commission|agency|bureau|department)\s*$', re.IGNORECASE),
+    # Law name fragments — ends with "Act" but isn't a company name
+    re.compile(r'\b(?:women|disabilities|privacy|recovery|consumer\s+privacy|clean\s+air|clean\s+water)\s+act\b', re.IGNORECASE),
+    # "Press Release AG..." headlines captured as names
+    re.compile(r'^press\s+release\b', re.IGNORECASE),
+    # "Acting [Title]" captured as a name
+    re.compile(r'^acting\s+(?:tax|attorney|district|commissioner)', re.IGNORECASE),
+    # Generic industry descriptors (not company names)
+    re.compile(r'(?:^|\b)(?:drug|opioid|pharmaceutical|tobacco|e-?cigarette|generic)\s+(?:maker|manufacturer|distributor|company|companies)s?\b', re.IGNORECASE),
+    # "[Place] Police Department" — law enforcement, not defendants
+    re.compile(r'\bpolice\s+department\b', re.IGNORECASE),
+    # FDA — never a defendant in AG enforcement
+    re.compile(r'\bfood\s+(?:&|and)\s+drug\s+administration\b', re.IGNORECASE),
+    # Count-word + generic noun ("Eight Drug Companies", "Three Defendants")
+    re.compile(r'^(?:two|three|four|five|six|seven|eight|nine|ten)\s+'
+               r'(?:drug|opioid|companies|businesses|defendants?|suspects?|people|'
+               r'victims?|officers?|providers?|manufacturers?|agencies)',
+               re.IGNORECASE),
+    # "Settlement With N" pattern leaked as defendant
+    re.compile(r'^settlement\s+with\b', re.IGNORECASE),
 ]
 
 
@@ -548,6 +657,27 @@ def _fix_headline_spacing(headline: str) -> str:
     return re.sub(r'([a-z])([A-Z])', r'\1 \2', headline)
 
 
+# Multi-word entity names that should NOT be split on "and"
+_AND_PROTECTED_PHRASES = re.compile(
+    r'\b(?:Food\s+and\s+Drug|Arms?\s+and\s+Ammunition|'
+    r'Alcohol,?\s+Tobacco,?\s+(?:Firearms?\s+)?and\s+|'
+    r'Johnson\s+and\s+Johnson|Procter\s+and\s+Gamble|'
+    r'Ernst\s+and\s+Young|Standard\s+and\s+Poor|'
+    r'Bath\s+and\s+Body|Harley.Davidson|'
+    r'Bed\s+Bath\s+and\s+Beyond|Barnes\s+and\s+Noble|'
+    r'Simon\s+and\s+Schuster|Merrill\s+Lynch.*and|'
+    r'cease\s+and\s+desist|assault\s+and\s+battery)',
+    re.IGNORECASE,
+)
+
+
+def _safe_and_split(name: str) -> list[str]:
+    """Split on ' and ' only when it separates distinct defendants, not mid-entity."""
+    if _AND_PROTECTED_PHRASES.search(name):
+        return [name]
+    return re.split(r'\s+and\s+(?:the\s+)?', name)
+
+
 def extract_defendants_from_headline(headline: str) -> list[str]:
     """Extract defendant names from a press release headline."""
     # Fix missing spaces (common in TX headlines from soft-hyphen stripping)
@@ -559,8 +689,7 @@ def extract_defendants_from_headline(headline: str) -> list[str]:
         match = pattern.search(headline)
         if match:
             raw_name = match.group(1).strip().rstrip(",.")
-            # Split on " and " to handle "Purdue Pharma and the Sackler Family"
-            parts = re.split(r'\s+and\s+(?:the\s+)?', raw_name)
+            parts = _safe_and_split(raw_name)
             for part in parts:
                 part = part.strip().rstrip(",.")
                 if not _is_valid_defendant_name(part):
@@ -586,8 +715,7 @@ def extract_defendants_from_body(text: str, max_chars: int = 1000) -> list[str]:
     for pattern in _BODY_DEFENDANT_PATTERNS:
         for match in pattern.finditer(search_text):
             raw_name = match.group(1).strip().rstrip(",.")
-            # Split on " and " to handle multiple defendants in one match
-            parts = re.split(r'\s+and\s+', raw_name)
+            parts = _safe_and_split(raw_name)
             for name in parts:
                 name = name.strip().rstrip(",.")
                 if not _is_valid_defendant_name(name):
@@ -613,39 +741,69 @@ _ACTION_TYPE_PATTERNS = [
 
     # --- Settlement (broad — most common resolution type) ---
     ("settlement", re.compile(
-        r'\b(?:settl(?:ed|ement|es|ing)|agrees?\s+to\s+pay|agreed\s+to\s+pay|'
-        r'reaches?\s+agreement|reached\s+agreement|resolves?|resolved|'
+        r'\b(?:settl(?:ed|ement|ements|es|ing)|agrees?\s+to\s+pay|agreed\s+to\s+pay|'
+        r'reaches?\s+(?:an?\s+)?agreement|reached\s+(?:an?\s+)?agreement|'
+        r'resolves?\s+(?:claims?|charges?|allegations?|dispute|investigation|case)|resolved|'
         r'pays?\s+fine|paid\s+fine|pays?\s+penalty|'
         r'consent\s+judgment|recover(?:s|ed|y|ies)|'
-        r'secures?\s+\$|obtains?\s+\$|wins?\s+\$)\b', re.IGNORECASE)),
+        r'secures?\s+(?:more\s+than\s+|over\s+|nearly\s+|approximately\s+)?\$|obtains?\s+\$|wins?\s+\$|'
+        r'secures?\s+(?:[\w$.,]+\s+){0,6}(?:agreement|settlement|debt\s+relief)|'
+        r'(?:ends?|ending)\s+(?:harmful|illegal|unlawful|deceptive)\s+\w+\s+practices?|'
+        r'delivers?\s+\$|restitution\s+(?:in|on)\s+the|'
+        r'(?:on\s+the\s+way|in\s+the\s+mail)\s+to|'
+        r'agrees?\s+to\s+(?:remove|stop|halt|cease|reform|change|end|eliminate|address|provide|destroy|surrender)|'
+        r'distributes?\s+(?:over\s+)?\$)\b', re.IGNORECASE)),
 
     # --- Judgment / criminal resolution ---
     ("judgment", re.compile(
-        r'\b(?:judgment|verdict|sentenced|sentencing|convicted|conviction|'
+        r'\b(?:judgments?|verdict|sentenced|sentencing|convicted|conviction|convictions?\s+of|'
         r'pleads?\s+guilty|pled\s+guilty|guilty\s+plea|guilty\s+verdict|'
-        r'found\s+(?:guilty|liable)|court\s+orders?|jury\s+(?:verdict|finds?))\b', re.IGNORECASE)),
+        r'found\s+(?:guilty|liable)|court\s+orders?\b|jury\s+(?:verdict|finds?)|'
+        r'(?:secures?|wins?)\s+(?:[\w]+\s+){0,3}(?:victory|ruling|win|review|decision)|'
+        r'surrenders?\s+(?:\w+\s+)?license|'
+        r'permanently\s+(?:shuts?|bars?|bans?|closes?)|'
+        r'arrested|(?:\d+\s+)?arrests?\s+(?:for|in|of|made)|'
+        r'court\s+(?:declares?|rules?|upholds?|affirms?|denies|strikes?\s+down)|'
+        r'judge\s+(?:dismisses?|rules?|orders?|blocks?|upholds?|strikes?)|'
+        r'(?:appellate|appeals?\s+court)\s+(?:decision|ruling|upholds?|affirms?)|'
+        r'blocks?\s+(?:[\w]+\s*\'?s?\s+){0,3}(?:attempt|motion|request|bid))\b', re.IGNORECASE)),
 
     # --- Injunction ---
     ("injunction", re.compile(
-        r'\b(?:injunction|restraining\s+order|cease\s+and\s+desist|'
-        r'banned?\s+from|temporarily\s+blocked|preliminary\s+injunction|'
-        r'permanent\s+injunction)\b', re.IGNORECASE)),
+        r'\b(?:injunction|restraining\s+order|TROs?\b|cease\s+and\s+desist|'
+        r'banned?\s+from|bans?\s+(?:[\w]+\s+){1,5}from|temporarily\s+blocked|'
+        r'preliminary\s+injunction|permanent\s+injunction|'
+        r'shut\s+down|shuts?\s+down|'
+        r'ordered?\s+to\s+(?:halt|stop|cease)|'
+        r'orders?\s+\w+\s+to\s+(?:halt|stop|cease)|'
+        r'demands?\s+(?:[\w]+\s+){0,4}(?:halt|stop|cease|immediate\s+halt))\b', re.IGNORECASE)),
 
     # --- Lawsuit filed (check after settlement — a "settlement" headline is more specific) ---
     ("lawsuit_filed", re.compile(
-        r'\b(?:(?:files?|filed)\s+(?:a\s+)?(?:lawsuit|complaint|action|suit|litigation)|'
-        r'announces?\s+(?:a\s+)?(?:lawsuit|complaint|suit|litigation)|'
+        r'\b(?:(?:files?|filed)\s+(?:[\w]+\s+){0,5}(?:lawsuit|complaint|action|suit|litigation|charges?|petition)|'
+        r'announces?\s+(?:[\w]+\s+){0,3}(?:lawsuit|complaint|suit|litigation|charges?\s+against|indictment)|'
         r'brings?\s+(?:a\s+)?(?:action|charges?|suit|complaint)|'
-        r'(?:takes?|took)\s+legal\s+action|'
-        r'charges?\s+\w+\s+with|'
-        r'sues?)\b', re.IGNORECASE)),
+        r'(?:takes?|took)\s+(?:legal\s+)?action\s+(?:against|to|in\s+)|'
+        r'charged?\s+with|facing\s+(?:[\w]+\s+){0,3}charges|'
+        r'charges?\s+(?:[\w]+\s+){0,5}(?:in\s+connection|defendant|suspect|individual)|'
+        r'indicts?|indicted|indictment|'
+        r'(?:co-?leads?|leads?|joins?)\s+(?:[\w-]+\s+){0,4}(?:lawsuit|litigation|suit|challenge)|'
+        r'sues?|sued|suing|'
+        r'(?:files?|launches?|announces?|commences?)\s+(?:[\w]+\s+){0,3}investigation|'
+        r'investigates?\b|'
+        r'(?:seeks?\s+to\s+(?:lead|co-?lead)\s+[\w\s-]*?(?:lawsuit|litigation|suit))|'
+        r'appeals?\s+(?:ruling|decision|order)|'
+        r'cracks?\s+down|crackdown|'
+        r'(?:enforcement\s+action)\s+against|'
+        r'pleads?\s+not\s+guilty|'
+        r'(?:expands?|updates?)\s+(?:[\w]+\s+){0,3}(?:investigation|lawsuit|suit))\b', re.IGNORECASE)),
 ]
 
 
 def classify_action_type(headline: str, body_text: str) -> str:
     """Classify the enforcement action type based on headline and body text.
 
-    Checks headline first (stronger signal), then body text.
+    Checks headline first (stronger signal), then body text with increasing depth.
     Returns the ActionType value string.
     """
     # Check headline first — it's the strongest signal
@@ -653,9 +811,14 @@ def classify_action_type(headline: str, body_text: str) -> str:
         if pattern.search(headline):
             return action_type
 
-    # Fall back to body text
+    # Fall back to body text — check first 2000 chars (first few paragraphs)
     for action_type, pattern in _ACTION_TYPE_PATTERNS:
-        if pattern.search(body_text[:1000]):  # Only check first 1000 chars
+        if pattern.search(body_text[:2000]):
+            return action_type
+
+    # Deeper body text search for weaker signals (first 5000 chars)
+    for action_type, pattern in _ACTION_TYPE_PATTERNS:
+        if pattern.search(body_text[:5000]):
             return action_type
 
     return "other"
