@@ -86,8 +86,8 @@ virginia:
     body: ".com-content-article__body"
   link_attribute: "href"
   rate_limit_seconds: 2
-  active: true
-  notes: "Joomla with Gantry 5. Table-based listing in .category-list. Body in .com-content-article__body. No dates in listing — extracted from body text."
+  active: false
+  notes: "Joomla with Gantry 5. Table-based listing produces near-zero results (10 records). Selectors may need updating or site structure has changed. Deferred until selectors can be verified."
 
 oregon:
   name: "Oregon"
@@ -128,8 +128,8 @@ pennsylvania:
     body: ".entry-content"
   link_attribute: "href"
   rate_limit_seconds: 2
-  active: true
-  notes: "WordPress. Custom 'Taking Action' post type. Needs custom scraper for listing parsing."
+  active: false
+  notes: "WordPress. Custom 'Taking Action' post type produces near-zero results (2 records). CSS selectors need custom scraper. Deferred."
 
 texas:
   name: "Texas"

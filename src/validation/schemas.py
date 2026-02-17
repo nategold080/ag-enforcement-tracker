@@ -152,8 +152,8 @@ class EnforcementActionSchema(BaseModel):
     quality_score: float = Field(default=0.0, ge=0.0, le=1.0)
     extraction_method: ExtractionMethod = Field(default=ExtractionMethod.RULES)
     raw_text: str = Field(default="")
-    created_at: DateTime = Field(default_factory=DateTime.utcnow)
-    updated_at: DateTime = Field(default_factory=DateTime.utcnow)
+    created_at: DateTime = Field(default_factory=lambda: DateTime.now(_dt.timezone.utc))
+    updated_at: DateTime = Field(default_factory=lambda: DateTime.now(_dt.timezone.utc))
 
     # Related objects (populated during extraction, not stored directly on this row)
     defendants: list[DefendantSchema] = Field(default_factory=list)
@@ -172,7 +172,7 @@ class ScrapeRunSchema(BaseModel):
 
     id: uuid.UUID = Field(default_factory=_new_uuid)
     state: str = Field(..., min_length=2, max_length=2)
-    started_at: DateTime = Field(default_factory=DateTime.utcnow)
+    started_at: DateTime = Field(default_factory=lambda: DateTime.now(_dt.timezone.utc))
     completed_at: Optional[DateTime] = None
     press_releases_found: int = 0
     actions_extracted: int = 0

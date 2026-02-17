@@ -6,7 +6,7 @@ These map 1:1 to the schema defined in CLAUDE.md.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -81,8 +81,8 @@ class EnforcementAction(Base):
     quality_score: Mapped[float] = mapped_column(Float, default=0.0)
     extraction_method: Mapped[str] = mapped_column(String(10), default="rules")
     raw_text: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     # Relationships
     multistate_action: Mapped[MultistateAction | None] = relationship(back_populates="actions")
@@ -185,7 +185,7 @@ class ScrapeRun(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid_default)
     state: Mapped[str] = mapped_column(String(2), nullable=False, index=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     press_releases_found: Mapped[int] = mapped_column(Integer, default=0)
     actions_extracted: Mapped[int] = mapped_column(Integer, default=0)

@@ -340,5 +340,6 @@ class TestNewStateRegistry:
     def test_active_states_include_new(self):
         from src.scrapers.registry import get_active_states
         active = get_active_states()
-        for state in ["california", "new_york", "ohio", "virginia", "oregon", "pennsylvania", "texas"]:
+        # VA and PA deferred due to near-zero scrape yields
+        for state in ["california", "new_york", "ohio", "oregon", "texas"]:
             assert state in active, f"{state} should be active"

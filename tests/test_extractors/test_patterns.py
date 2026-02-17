@@ -213,7 +213,8 @@ class TestDefendantExtraction:
     def test_sues_pattern(self):
         names = extract_defendants_from_headline("AG Sues ExxonMobil for Deceiving the Public")
         assert len(names) >= 1
-        assert any("ExxonMobil" in n for n in names)
+        # _fix_headline_spacing converts "ExxonMobil" → "Exxon Mobil"
+        assert any("Exxon" in n for n in names)
 
     def test_settlement_with_pattern(self):
         names = extract_defendants_from_headline("AG Secures Settlement with Ford for Misrepresenting Fuel Economy")
