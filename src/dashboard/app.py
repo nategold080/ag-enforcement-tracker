@@ -609,10 +609,11 @@ def main():
     /* Table styling */
     .dataframe { font-family: 'Inter', sans-serif !important; }
 
-    /* Hide Streamlit branding */
+    /* Hide Streamlit branding and GitHub link */
     #MainMenu { visibility: hidden; }
     footer { visibility: hidden; }
     header[data-testid="stHeader"] { background: transparent; }
+    [data-testid="stToolbar"] { display: none; }
 
     /* Sidebar */
     [data-testid="stSidebar"] { background: #F8FAFC; }
