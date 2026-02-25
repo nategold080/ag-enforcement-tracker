@@ -542,10 +542,9 @@ def load_company_search_data() -> pd.DataFrame:
 # ── Page layout ───────────────────────────────────────────────────────────
 
 def main():
-    favicon = Path(__file__).resolve().parent.parent.parent / ".streamlit" / "favicon.png"
     st.set_page_config(
         page_title="State AG Enforcement Tracker",
-        page_icon=str(favicon) if favicon.exists() else ":scales:",
+        page_icon="\u2696\ufe0f",
         layout="wide",
         initial_sidebar_state="collapsed",
     )
