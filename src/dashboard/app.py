@@ -609,11 +609,20 @@ def main():
     /* Table styling */
     .dataframe { font-family: 'Inter', sans-serif !important; }
 
-    /* Hide Streamlit branding and GitHub link */
+    /* Hide Streamlit branding, GitHub link, and hosted badges */
     #MainMenu { visibility: hidden; }
     footer { visibility: hidden; }
     header[data-testid="stHeader"] { background: transparent; }
     [data-testid="stToolbar"] { display: none; }
+    [data-testid="stAppDeployButton"] { display: none; }
+    ._profileContainer_gzau3_53 { display: none !important; }
+    ._container_gzau3_1 { display: none !important; }
+    [data-testid="stStatusWidget"] { display: none; }
+    /* Catch-all: hide fixed-position bottom-right badges */
+    div[class*="profileContainer"] { display: none !important; }
+    div[class*="hostContainer"] { display: none !important; }
+    iframe[title="streamlit_badge"] { display: none !important; }
+    #stStreamlitBadge { display: none !important; }
 
     /* Sidebar */
     [data-testid="stSidebar"] { background: #F8FAFC; }
