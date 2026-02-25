@@ -60,7 +60,7 @@ class EnforcementAction(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid_default)
     state: Mapped[str] = mapped_column(String(2), nullable=False, index=True)
-    date_announced: Mapped[date] = mapped_column(Date, nullable=False)
+    date_announced: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     date_filed: Mapped[date | None] = mapped_column(Date, nullable=True)
     date_resolved: Mapped[date | None] = mapped_column(Date, nullable=True)
     action_type: Mapped[str] = mapped_column(
@@ -78,7 +78,7 @@ class EnforcementAction(Base):
     multistate_action_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("multistate_actions.id"), nullable=True,
     )
-    quality_score: Mapped[float] = mapped_column(Float, default=0.0)
+    quality_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
     extraction_method: Mapped[str] = mapped_column(String(10), default="rules")
     raw_text: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))

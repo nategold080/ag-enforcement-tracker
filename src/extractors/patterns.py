@@ -12,9 +12,11 @@ import re
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Optional
 
 import dateparser
+import yaml
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +111,24 @@ _NON_SETTLEMENT_CONTEXT_RE = re.compile(
     r'seiz(?:ed?|ure|ing)|fentanyl|trafficking|narcotic|border|'
     r'gross\s+domestic|GDP|economy|economic\s+(?:impact|growth|loss)|'
     r'revenue|sales|market\s+(?:cap|value)|stock|share\s+price|'
-    r'annual\s+(?:revenue|budget|sales)|industry|sector)',
+    r'annual\s+(?:revenue|budget|sales)|industry|sector|'
+    # Student loan / debt relief programs (policy, not settlements)
+    r'student\s+loan|debt\s+(?:forgiveness|cancellation|discharge)|'
+    # Hypothetical costs/harms in policy opinion pieces
+    r'would\s+(?:cause|cost|harm|result|lose|destroy|eliminate)|irreparable|'
+    # Agency dismantling / elimination (policy advocacy)
+    r'dismantl|'
+    # Federal agency impact amounts (not AG settlement amounts)
+    r'CFPB|Consumer\s+Financial\s+Protection\s+Bureau|'
+    # Proposed legislation / rulemaking cost estimates
+    r'proposed\s+(?:rule|regulation|legislation|bill)|'
+    # Wage amounts — "$1 per day" is not a settlement
+    r'wage|per\s+(?:hour|day|week|month|year)|hourly\s+rate|minimum\s+wage|'
+    # Ballot measures / initiatives — numbers parsed as dollars
+    r'initiative|ballot\s+measure|proposition|I-\d+|'
+    # Hypothetical exposure amounts — "could face up to $X"
+    r'exposed?\s+to|risk\s+of|face(?:s|d)?\s+(?:up\s+to)|could\s+face|'
+    r'maximum\s+(?:penalty|fine)\s+of|up\s+to\s+\$)',
     re.IGNORECASE,
 )
 
@@ -136,6 +155,9 @@ def extract_settlement_amount(headline: str, body: str) -> Optional[ExtractedAmo
     # Universal sanity cap: no single AG enforcement action has exceeded $30B.
     # The largest was the $26B opioid distributor settlement.
     _MAX_SETTLEMENT = Decimal("30000000000")  # $30B
+
+    # Fix missing spaces from soft-hyphen stripping (TX headlines: "$168Mfor" → "$168M for")
+    headline = _fix_headline_spacing(headline)
 
     # Priority 1: Headline amount (but check for non-settlement context)
     headline_amounts = extract_dollar_amounts(headline)
@@ -169,7 +191,7 @@ def extract_settlement_amount(headline: str, body: str) -> Optional[ExtractedAmo
                 pass
 
     # Priority 3: Fallback to largest amount in first 1500 chars of body only
-    body_head = body[:1500]
+    body_head = _fix_headline_spacing(body[:1500])
     amounts = extract_dollar_amounts(body_head)
     if not amounts:
         return None
@@ -289,8 +311,21 @@ _STATUTE_PATTERNS = [
     re.compile(r'(?:California\s+)?(\w[\w\s]+?)\s+Code\s+(?:section|§§?)\s*([\d.]+(?:\s*(?:et\s+seq|through)\s*[\d.]*)?)', re.IGNORECASE),
     # Federal statutes by USC: "15 U.S.C. § 45"
     re.compile(r'(\d+)\s+U\.?S\.?C\.?\s*§?\s*([\d]+(?:\([a-z]\))?)', re.IGNORECASE),
-    # Common law names
-    re.compile(r'\b(Sherman\s+Act|Clayton\s+Act|FTC\s+Act|False\s+Claims\s+Act|CCPA|COPPA|TCPA|CAN-SPAM|HIPAA|FCRA|UDAP|Unfair\s+Competition\s+Laws?|UCL|Telephone\s+Consumer\s+Protection\s+Act|Telemarketing\s+Sales\s+Rule|Truth\s+in\s+Caller\s+ID\s+Act|Anti-?Kickback\s+Statute|Stark\s+Law|Unclaimed\s+Property\s+Law)\b', re.IGNORECASE),
+    # Common law names (acronyms and full names)
+    re.compile(r'\b(Sherman\s+Act|Clayton\s+Act|FTC\s+Act|False\s+Claims\s+Act|'
+               r'CCPA|COPPA|TCPA|CAN-SPAM|HIPAA|FCRA|RICO|UDAP|ADA|FLSA|OSHA|ECOA|TILA|RESPA|FDCPA|'
+               r'Unfair\s+Competition\s+Laws?|UCL|CLRA|'
+               r'Telephone\s+Consumer\s+Protection\s+Act|Telemarketing\s+Sales\s+Rule|'
+               r'Truth\s+in\s+Caller\s+ID\s+Act|Truth\s+in\s+Lending\s+Act|'
+               r'Anti-?Kickback\s+Statute|Stark\s+Law|Unclaimed\s+Property\s+Law|'
+               r'Clean\s+Air\s+Act|Clean\s+Water\s+Act|Fair\s+Housing\s+Act|'
+               r'Fair\s+Credit\s+Reporting\s+Act|Fair\s+Debt\s+Collection\s+Practices\s+Act|'
+               r'Dodd-?Frank\s+Act|Consumer\s+Legal\s+Remedies\s+Act|'
+               r'Consumer\s+Fraud\s+Act|Elder\s+Abuse\s+Act|'
+               r'Real\s+Estate\s+Settlement\s+Procedures\s+Act|'
+               r'Equal\s+Credit\s+Opportunity\s+Act|'
+               r'Racketeer\s+Influenced\s+and\s+Corrupt\s+Organizations\s+Act'
+               r')\b', re.IGNORECASE),
     # "in violation of" / "violating" pattern (allows commas for lists of laws)
     re.compile(r'(?:in\s+violation\s+of|violat(?:ed|ing))\s+(?:the\s+|state\s+)?(?:[\w\s,]+?\s+)((?:Act|Laws?|Code|Statute|Rule|Regulation)s?)\b', re.IGNORECASE),
 ]
@@ -304,8 +339,66 @@ class ExtractedStatute:
     common_name: str
 
 
-_FEDERAL_INDICATORS = {"u.s.c.", "usc", "federal", "ftc", "sherman", "clayton", "can-spam", "hipaa", "fcra", "coppa", "tcpa"}
-_STATE_INDICATORS = {"california", "business and professions", "civil code", "health and safety", "penal code", "ccpa", "ucl", "unfair competition"}
+_FEDERAL_INDICATORS = {
+    "u.s.c.", "usc", "federal", "ftc", "sherman", "clayton", "can-spam",
+    "hipaa", "fcra", "coppa", "tcpa", "rico", "dodd-frank", "respa", "tila",
+    "ecoa", "ada", "flsa", "osha", "stark", "anti-kickback", "clean air",
+    "clean water", "fair housing act", "fdcpa", "telemarketing sales rule",
+    "truth in caller", "truth in lending",
+}
+_STATE_INDICATORS = {
+    "california", "business and professions", "civil code", "health and safety",
+    "penal code", "ccpa", "ucl", "unfair competition", "clra", "consumer legal remedies",
+    "unclaimed property", "udap", "consumer fraud act", "consumer protection act",
+}
+
+
+_STATUTE_COMMON_NAMES: list[tuple[re.Pattern, str]] = [
+    # Federal statutes
+    (re.compile(r'ccpa|consumer privacy act', re.IGNORECASE), "CCPA"),
+    (re.compile(r'coppa|children.s online privacy', re.IGNORECASE), "COPPA"),
+    (re.compile(r'tcpa|telephone consumer protection', re.IGNORECASE), "TCPA"),
+    (re.compile(r'hipaa|health insurance portability', re.IGNORECASE), "HIPAA"),
+    (re.compile(r'fcra|fair credit reporting', re.IGNORECASE), "FCRA"),
+    (re.compile(r'can.spam', re.IGNORECASE), "CAN-SPAM"),
+    (re.compile(r'clean air act', re.IGNORECASE), "Clean Air Act"),
+    (re.compile(r'clean water act', re.IGNORECASE), "Clean Water Act"),
+    (re.compile(r'\brico\b|racketeer influenced', re.IGNORECASE), "RICO"),
+    (re.compile(r'dodd.frank', re.IGNORECASE), "Dodd-Frank Act"),
+    (re.compile(r'respa|real estate settlement', re.IGNORECASE), "RESPA"),
+    (re.compile(r'tila|truth in lending', re.IGNORECASE), "TILA"),
+    (re.compile(r'ecoa|equal credit opportunity', re.IGNORECASE), "ECOA"),
+    (re.compile(r'\bada\b|americans with disabilities', re.IGNORECASE), "ADA"),
+    (re.compile(r'flsa|fair labor standards', re.IGNORECASE), "FLSA"),
+    (re.compile(r'osha|occupational safety', re.IGNORECASE), "OSHA"),
+    (re.compile(r'stark law', re.IGNORECASE), "Stark Law"),
+    (re.compile(r'anti.kickback statute', re.IGNORECASE), "Anti-Kickback Statute"),
+    (re.compile(r'ftc act|federal trade commission act', re.IGNORECASE), "FTC Act"),
+    (re.compile(r'sherman act|sherman\s', re.IGNORECASE), "Sherman Act"),
+    (re.compile(r'clayton act|clayton\s', re.IGNORECASE), "Clayton Act"),
+    (re.compile(r'false claims act|false claims', re.IGNORECASE), "False Claims Act"),
+    (re.compile(r'telemarketing sales rule', re.IGNORECASE), "Telemarketing Sales Rule"),
+    (re.compile(r'truth in caller', re.IGNORECASE), "Truth in Caller ID Act"),
+    (re.compile(r'fair housing act', re.IGNORECASE), "Fair Housing Act"),
+    (re.compile(r'fair debt collection', re.IGNORECASE), "FDCPA"),
+    (re.compile(r'elder abuse', re.IGNORECASE), "Elder Abuse Act"),
+    (re.compile(r'unfair\s+(?:and\s+)?deceptive.*(?:act|practices)|udap', re.IGNORECASE), "UDAP"),
+    (re.compile(r'consumer fraud act', re.IGNORECASE), "Consumer Fraud Act"),
+    # California-specific statutes
+    (re.compile(r'business and professions code\s+(?:section\s+)?(?:§§?\s*)?172', re.IGNORECASE), "UCL"),
+    (re.compile(r'ucl|unfair competition law', re.IGNORECASE), "UCL"),
+    (re.compile(r'civil code\s+(?:section\s+)?(?:§§?\s*)?175', re.IGNORECASE), "CLRA"),
+    (re.compile(r'consumers?\s+legal\s+remedies', re.IGNORECASE), "CLRA"),
+    (re.compile(r'unclaimed property', re.IGNORECASE), "Unclaimed Property Law"),
+]
+
+
+def _resolve_statute_common_name(raw_lower: str) -> str:
+    """Map raw statute text to a common name."""
+    for pattern, name in _STATUTE_COMMON_NAMES:
+        if pattern.search(raw_lower):
+            return name
+    return ""
 
 
 def extract_statutes(text: str) -> list[ExtractedStatute]:
@@ -325,19 +418,7 @@ def extract_statutes(text: str) -> list[ExtractedStatute]:
             is_state = any(ind in raw_lower for ind in _STATE_INDICATORS)
 
             # Determine common name
-            common_name = ""
-            if "ccpa" in raw_lower or "consumer privacy act" in raw_lower:
-                common_name = "CCPA"
-            elif "ucl" in raw_lower or "unfair competition" in raw_lower:
-                common_name = "UCL"
-            elif "false claims" in raw_lower:
-                common_name = "False Claims Act"
-            elif "sherman" in raw_lower:
-                common_name = "Sherman Act"
-            elif "tcpa" in raw_lower:
-                common_name = "TCPA"
-            elif "coppa" in raw_lower:
-                common_name = "COPPA"
+            common_name = _resolve_statute_common_name(raw_lower)
 
             results.append(ExtractedStatute(
                 raw_citation=raw,
@@ -355,198 +436,24 @@ def extract_statutes(text: str) -> list[ExtractedStatute]:
 
 # Blocklist: phrases that regex patterns match but are NOT defendant names.
 # Lowercased for comparison.
-_DEFENDANT_BLOCKLIST = {
-    # Legal boilerplate
-    "is presumed innocent",
-    "is presumed innocent until proven guilty",
-    "is presumed innocent until",
-    "are presumed innocent",
-    "are presumed innocent unless proved guilty in a court of law",
-    "presumed innocent until proven guilty",
-    "innocent until proven guilty",
-    "proven guilty",
-    "proved guilty in a court of law",
-    # AG offices and officials (not defendants)
-    "attorney general",
-    "the attorney general",
-    "general bonta",
-    "general james",
-    "general raoul",
-    "general rayfield",
-    "general yost",
-    "general paxton",
-    "general miyares",
-    "general rosenblum",
-    "attorney general bonta",
-    "attorney general james",
-    "attorney general raoul",
-    "attorney general dan rayfield",
-    "attorney general dave yost",
-    "attorney general ken paxton",
-    "attorney general jason miyares",
-    "attorney general ellen rosenblum",
-    "attorney general dan rayfield on court hearing",
-    "the office of the attorney general",
-    "the department of justice",
-    "the district attorney",
-    # Generic descriptors
-    "the company",
-    "the corporation",
-    "the defendant",
-    "the defendants",
-    "the respondent",
-    "the state",
-    "its founder",
-    "founder",
-    "its subsidiaries",
-    "related entities",
-    "other parties",
-    "distributors",
-    "the administration",
-    "trump administration",
-    "the trump administration",
-    "trump administration to protect",
-    "president trump",
-    "president donald trump",
-    # Common false positives from body text patterns
-    "natural disasters. by focusing on preparation",
-    "natural disasters. by focusing on mitigation",
-    "and 10 individual defendants",
-    "and 25 individual executives",
-    "10 individual defendants",
-    "individual defendants",
-    "individual executives",
-    "home décor retailer",
-    "kratom retailers",
-    "seafood distributor",
-    "used-car dealer",
-    "seller",
-    "chile",
-    # Government/political entities (not defendants in AG actions)
-    "biden-harris administration",
-    "biden administration",
-    "trump administration",
-    "the biden administration",
-    "the administration",
-    "biden",
-    "president biden",
-    "donald trump",
-    "president donald trump",
-    "investigation",
-    "notification of",
-    "consumer alert",
-    "federal",
-    "federal law",
-    "complete",
-    "election",
-    "school district",
-    "predatory lender",
-    "electric company",
-    "debt collector",
-    "insurance company",
-    "pharmaceutical company",
-    "drug company",
-    "online retailer",
-    "tech company",
-    "oil company",
-    "gas company",
-    "utility company",
-    "health insurer",
-    "credit bureau",
-    # Generic sentence fragments that match defendant patterns
-    "help", "patient", "them", "their", "its owners", "it owners",
-    "his", "her", "owners", "owner", "its parent", "its ceo",
-    "his companies", "her companies", "guidance", "guidance to help",
-    "children", "ice", "pharmaceutical", "real estate",
-    "business", "disabilities", "discrimination", "sexual harassment",
-    "mortgage", "three", "two", "four", "three companies",
-    "four companies", "any", "major", "operating", "nation",
-    "transgender", "predatory", "spread of nonconsensual",
-    "members of the sackler family",
-    "the walt disney company",  # will be resolved by entity resolution instead
-    # Government agency fragments (tails of multi-word proper nouns split on "and")
-    "drug administration",       # from "Food and Drug Administration"
-    "homeland security",         # from "Department of Homeland Security"
-    "women act",                 # from "Violence Against Women Act"
-    "disabilities act",          # from "Americans with Disabilities Act"
-    "drug manufacturers",
-    "drug companies",
-    "drug maker",
-    "drug manufacturer",
-    # Government bodies — never defendants in AG enforcement
-    "u.s. environmental protection agency",
-    "u.s. postal service",
-    "u.s. state department",
-    "u.s. labor department",
-    "u.s. bureau of land management",
-    "federal highway administration",
-    "federal communications commission",
-    "federal trade commission",
-    "federal emergency management agency",
-    "nuclear regulatory commission",
-    "equal employment opportunity commission",
-    "transportation commission",
-    "bureau of alcohol, tobacco, firearms",
-    "bureau of alcohol",
-    "social security",
-    "harris county commissioners court",
-    # Generic role descriptors (not specific company names)
-    "debt collection agency",
-    "online travel agency",
-    "staffing agency",
-    "state housing agency",
-    "mandatory poster agency",
-    "health agency",
-    "home health agency",
-    # Headlines/fragments that leak through as defendant names
-    "press release ag",
-    "acting tax commissioner",
-    "county school board",
-    "college board",
-    "high court",
-}
+def _load_defendant_blocklist() -> tuple[set[str], list[re.Pattern]]:
+    """Load the defendant blocklist from config/defendant_blocklist.yaml.
 
-# Additional blocklist patterns (regex-based for flexible matching)
-_DEFENDANT_BLOCKLIST_PATTERNS = [
-    re.compile(r'^(?:the\s+)?(?:state|county|city|town|district)\s+of\b', re.IGNORECASE),
-    re.compile(r'^(?:attorney|district)\s+general', re.IGNORECASE),
-    re.compile(r'\b(?:presumed|innocent|guilty|convicted)\b', re.IGNORECASE),
-    re.compile(r'^(?:a|an|the|this|that|these|those|his|her|its|their)\s*$', re.IGNORECASE),
-    re.compile(r'^\d+\s+individual\s+', re.IGNORECASE),
-    re.compile(r'^(?:mr|mrs|ms|dr)\.?\s*$', re.IGNORECASE),
-    # "Court Orders Company Required" type false positive
-    re.compile(r'^court\s+orders?\b', re.IGNORECASE),
-    # Generic violation descriptions that get captured as defendants
-    re.compile(r'\b(?:violations?|protection|practices|fraud)\s*$', re.IGNORECASE),
-    # Pure numbers (e.g., "29", "30")
-    re.compile(r'^\d+$'),
-    # "N Companies/Businesses" pattern
-    re.compile(r'^\d+\s+(?:companies|businesses|firms|individuals|defendants)', re.IGNORECASE),
-    # Generic role descriptions
-    re.compile(r'^(?:federal|state|local)\s+(?:government|officials|agencies)', re.IGNORECASE),
-    # Government agency tail fragments (from "and"-splitting multi-word names)
-    re.compile(r'^(?:drug|highway|transit|veterans?)\s+administration\b', re.IGNORECASE),
-    re.compile(r'\b(?:commission|agency|bureau|department)\s*$', re.IGNORECASE),
-    # Law name fragments — ends with "Act" but isn't a company name
-    re.compile(r'\b(?:women|disabilities|privacy|recovery|consumer\s+privacy|clean\s+air|clean\s+water)\s+act\b', re.IGNORECASE),
-    # "Press Release AG..." headlines captured as names
-    re.compile(r'^press\s+release\b', re.IGNORECASE),
-    # "Acting [Title]" captured as a name
-    re.compile(r'^acting\s+(?:tax|attorney|district|commissioner)', re.IGNORECASE),
-    # Generic industry descriptors (not company names)
-    re.compile(r'(?:^|\b)(?:drug|opioid|pharmaceutical|tobacco|e-?cigarette|generic)\s+(?:maker|manufacturer|distributor|company|companies)s?\b', re.IGNORECASE),
-    # "[Place] Police Department" — law enforcement, not defendants
-    re.compile(r'\bpolice\s+department\b', re.IGNORECASE),
-    # FDA — never a defendant in AG enforcement
-    re.compile(r'\bfood\s+(?:&|and)\s+drug\s+administration\b', re.IGNORECASE),
-    # Count-word + generic noun ("Eight Drug Companies", "Three Defendants")
-    re.compile(r'^(?:two|three|four|five|six|seven|eight|nine|ten)\s+'
-               r'(?:drug|opioid|companies|businesses|defendants?|suspects?|people|'
-               r'victims?|officers?|providers?|manufacturers?|agencies)',
-               re.IGNORECASE),
-    # "Settlement With N" pattern leaked as defendant
-    re.compile(r'^settlement\s+with\b', re.IGNORECASE),
-]
+    Returns (exact_matches_set, compiled_patterns_list).
+    """
+    blocklist_path = Path(__file__).resolve().parent.parent.parent / "config" / "defendant_blocklist.yaml"
+    if not blocklist_path.exists():
+        return set(), []
+
+    with open(blocklist_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+
+    exact = {entry.lower().strip() for entry in data.get("exact_matches", [])}
+    patterns = [re.compile(p, re.IGNORECASE) for p in data.get("patterns", [])]
+    return exact, patterns
+
+
+_DEFENDANT_BLOCKLIST, _DEFENDANT_BLOCKLIST_PATTERNS = _load_defendant_blocklist()
 
 
 def _is_valid_defendant_name(name: str) -> bool:
@@ -576,6 +483,42 @@ def _is_valid_defendant_name(name: str) -> bool:
 
     # Must contain at least one letter
     if not re.search(r'[a-zA-Z]', name_stripped):
+        return False
+
+    # Reject names with "that Would/Could/Should" — always sentence fragments
+    if re.search(r'\bthat\s+(?:would|could|should|will|may|might|did)\b', name_stripped, re.IGNORECASE):
+        return False
+
+    # Reject "Name, Descriptor" patterns where after-comma text is not a name
+    # e.g., "Disney, Largest CCPA Settlement" — keep "Disney" but reject the whole string
+    if ',' in name_stripped:
+        after_comma = name_stripped.split(',', 1)[1].strip()
+        if re.match(r'(?:largest|biggest|first|major|historic|record|significant)\b', after_comma, re.IGNORECASE):
+            return False
+
+    # Reject names containing "for [gerund/adjective]" — headline fragments like
+    # "TurboTax Owner Intuit for Deceiving Low-" or "Company for Misleading"
+    if re.search(r'\bfor\s+(?:deceiving|misleading|defrauding|violating|failing|scamming|'
+                 r'harming|exploiting|overcharging|deceptive|illegal|unlawful|false|unfair)',
+                 name_stripped, re.IGNORECASE):
+        return False
+
+    # Reject "[Place] man/woman/business/resident" patterns (WA headline style)
+    if re.match(r'^[A-Z]\w+(?:\s+[A-Z]\w+)?\s+(?:man|woman|men|women|business|resident|couple|family)$',
+                name_stripped, re.IGNORECASE):
+        return False
+
+    # Reject names that end with a trailing hyphen (truncated fragments)
+    if name_stripped.endswith('-'):
+        return False
+
+    # Reject generic industry/crypto/e-cigarette terms as defendant names
+    # Matches both standalone terms ("E-Cigarette") and prefixed names
+    # ("Crypto Firm Genesis Global Capital", "Cryptocurrency Companies Gemini, Genesis")
+    if re.match(r'^(?:e-?cigarette|cryptocurrency|crypto|vaping|mortgage|tobacco)\s*'
+                r'(?:platform|companies|company|firm|firms|exchange|exchanges|lender|'
+                r'lenders|broker|brokers|servicer|servicers)?s?(?:\s|,|$)',
+                name_stripped, re.IGNORECASE):
         return False
 
     # Reject if it's mostly lowercase words (sentence fragments, not names)
@@ -653,8 +596,12 @@ def _fix_headline_spacing(headline: str) -> str:
 
     Inserts a space before uppercase letters that follow lowercase letters
     without a space, handling patterns like 'fromCVSand' → 'from CVS and'.
+    Also inserts a space after dollar multipliers (M/B/K) glued to the next
+    word, e.g., '$168Mfor' → '$168M for', '$160MFraud' → '$160M Fraud'.
     """
-    return re.sub(r'([a-z])([A-Z])', r'\1 \2', headline)
+    headline = re.sub(r'([a-z])([A-Z])', r'\1 \2', headline)
+    headline = re.sub(r'(\d[MBKmbk])([A-Za-z])', r'\1 \2', headline)
+    return headline
 
 
 # Multi-word entity names that should NOT be split on "and"

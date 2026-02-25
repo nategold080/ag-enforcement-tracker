@@ -68,6 +68,42 @@ class TestKeywordScreen:
         )
         assert result.is_enforcement is False
 
+    # P5: Wayback Machine leak fixes
+    def test_murder_case_is_not_enforcement(self):
+        result = is_enforcement_action(
+            "Ex-Husband Found Guilty of Murder in 2001 Cold Case",
+            "The jury convicted the defendant of first-degree murder.",
+        )
+        assert result.is_enforcement is False
+
+    def test_highlights_wins_is_not_enforcement(self):
+        result = is_enforcement_action(
+            "AG Yost Highlights 2025 Human Trafficking Wins",
+            "The AG celebrated the work of his office over the past year.",
+        )
+        assert result.is_enforcement is False
+
+    def test_referendum_is_not_enforcement(self):
+        result = is_enforcement_action(
+            "Title and Summary Language Certified for Proposed Referendum",
+            "The AG certified the ballot measure language.",
+        )
+        assert result.is_enforcement is False
+
+    def test_passing_of_officer_is_not_enforcement(self):
+        result = is_enforcement_action(
+            "AG Yost's Statement on Passing of Sheriff's Lieutenant",
+            "The AG mourns the loss of a dedicated law enforcement officer.",
+        )
+        assert result.is_enforcement is False
+
+    def test_serial_murder_guilty_plea_is_not_enforcement(self):
+        result = is_enforcement_action(
+            "Statement from AG Yost on Guilty Plea in Serial Murder Case",
+            "The defendant pled guilty to three counts of aggravated murder.",
+        )
+        assert result.is_enforcement is False
+
 
 class TestRealFixtures:
     """Test against real CA AG press release fixtures."""

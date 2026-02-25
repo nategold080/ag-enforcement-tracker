@@ -11,6 +11,8 @@ dollar amount if present, state) for matching.
 from __future__ import annotations
 
 import logging
+import uuid
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
@@ -20,6 +22,8 @@ from thefuzz import fuzz
 logger = logging.getLogger(__name__)
 
 DATE_WINDOW_DAYS = 30
+# Wider date window for multistate actions (same settlement announced weeks apart)
+MULTISTATE_DATE_WINDOW_DAYS = 730  # ~2 years per P3 spec
 DEFENDANT_SIMILARITY_THRESHOLD = 80  # token_sort_ratio
 
 
@@ -68,8 +72,13 @@ def find_duplicates(candidates: list[DedupCandidate]) -> list[DedupMatch]:
 def _compare_pair(a: DedupCandidate, b: DedupCandidate) -> DedupMatch | None:
     """Compare two candidates and return a DedupMatch if they look like duplicates."""
 
+    # Use wider date window when both are multistate
+    date_window = DATE_WINDOW_DAYS
+    if a.is_multistate and b.is_multistate and a.state != b.state:
+        date_window = MULTISTATE_DATE_WINDOW_DAYS
+
     # Must be within date window
-    if abs((a.date_announced - b.date_announced).days) > DATE_WINDOW_DAYS:
+    if abs((a.date_announced - b.date_announced).days) > date_window:
         return None
 
     # Must have at least one defendant to compare
@@ -89,9 +98,9 @@ def _compare_pair(a: DedupCandidate, b: DedupCandidate) -> DedupMatch | None:
     confidence += 0.4 * (defendant_score / 100.0)
     reasons.append(f"defendants={defendant_score}%")
 
-    # Date proximity
+    # Date proximity (use the same window that passed the initial filter)
     date_diff = abs((a.date_announced - b.date_announced).days)
-    date_score = 1.0 - (date_diff / DATE_WINDOW_DAYS)
+    date_score = max(0.0, 1.0 - (date_diff / date_window))
     confidence += 0.2 * date_score
     reasons.append(f"date_diff={date_diff}d")
 
@@ -151,3 +160,175 @@ def _amounts_similar(a: Decimal, b: Decimal) -> bool:
         return a == b
     ratio = float(min(a, b) / max(a, b))
     return ratio >= 0.9
+
+
+# ---------------------------------------------------------------------------
+# Multistate action clustering and DB linking
+# ---------------------------------------------------------------------------
+
+@dataclass
+class MultistateCluster:
+    """A cluster of enforcement actions that represent the same multistate action."""
+    cluster_id: str
+    action_ids: list[str]
+    states: list[str]
+    lead_state: str | None
+    name: str
+    total_settlement: Decimal | None
+
+
+def cluster_multistate_matches(
+    candidates: list[DedupCandidate],
+    matches: list[DedupMatch],
+) -> list[MultistateCluster]:
+    """Group multistate duplicate matches into clusters using union-find.
+
+    Takes pairwise matches and groups them into connected components,
+    then builds MultistateCluster objects with metadata.
+    """
+    # Filter to multistate matches only
+    ms_matches = [m for m in matches if m.match_type == "multistate"]
+    if not ms_matches:
+        return []
+
+    # Build lookup for candidates
+    cand_by_id: dict[str, DedupCandidate] = {c.action_id: c for c in candidates}
+
+    # Union-Find to group connected actions into clusters
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        while parent.get(x, x) != x:
+            parent[x] = parent.get(parent[x], parent[x])
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for m in ms_matches:
+        union(m.action_id_a, m.action_id_b)
+
+    # Group by root
+    groups: dict[str, list[str]] = defaultdict(list)
+    all_ids = {m.action_id_a for m in ms_matches} | {m.action_id_b for m in ms_matches}
+    for aid in all_ids:
+        groups[find(aid)].append(aid)
+
+    # Build clusters
+    clusters: list[MultistateCluster] = []
+    for group_ids in groups.values():
+        if len(group_ids) < 2:
+            continue
+
+        cands = [cand_by_id[aid] for aid in group_ids if aid in cand_by_id]
+        states = sorted(set(c.state for c in cands))
+
+        # Pick the highest settlement amount as the canonical total
+        amounts = [c.total_amount for c in cands if c.total_amount]
+        total = max(amounts) if amounts else None
+
+        # Use the earliest action's defendant list for the name
+        earliest = min(cands, key=lambda c: c.date_announced)
+        name_parts = earliest.defendants[:2] if earliest.defendants else []
+        name = ", ".join(name_parts) if name_parts else earliest.headline[:80]
+
+        # Lead state: the one that announced first
+        lead_state = earliest.state
+
+        clusters.append(MultistateCluster(
+            cluster_id=str(uuid.uuid4()),
+            action_ids=[c.action_id for c in cands],
+            states=states,
+            lead_state=lead_state,
+            name=name,
+            total_settlement=total,
+        ))
+
+    logger.info("Found %d multistate clusters from %d matches", len(clusters), len(ms_matches))
+    return clusters
+
+
+def link_multistate_actions(db) -> int:
+    """Detect multistate duplicates and create multistate_actions records in the DB.
+
+    Returns the number of multistate clusters created.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import joinedload
+    from src.storage.models import (
+        EnforcementAction,
+        ActionDefendant,
+        Defendant,
+        MonetaryTerms,
+        MultistateAction,
+    )
+
+    with db.get_session() as session:
+        # Load all multistate-flagged actions with their defendants and amounts
+        stmt = (
+            select(EnforcementAction)
+            .options(
+                joinedload(EnforcementAction.action_defendants).joinedload(ActionDefendant.defendant),
+                joinedload(EnforcementAction.monetary_terms),
+            )
+            .where(EnforcementAction.is_multistate == True)  # noqa: E712
+        )
+        actions = session.execute(stmt).unique().scalars().all()
+
+        if not actions:
+            logger.info("No multistate actions found to cluster.")
+            return 0
+
+        # Build DedupCandidates
+        candidates = []
+        for a in actions:
+            defendants = [
+                ad.defendant.canonical_name or ad.defendant.raw_name
+                for ad in a.action_defendants
+                if ad.defendant.canonical_name or ad.defendant.raw_name
+            ]
+            amount = a.monetary_terms.total_amount if a.monetary_terms else None
+            candidates.append(DedupCandidate(
+                action_id=a.id,
+                state=a.state,
+                date_announced=a.date_announced,
+                defendants=defendants,
+                total_amount=amount,
+                headline=a.headline,
+                is_multistate=True,
+            ))
+
+        logger.info("Comparing %d multistate candidates for dedup...", len(candidates))
+
+        # Find pairwise matches
+        matches = find_duplicates(candidates)
+
+        # Cluster into groups
+        clusters = cluster_multistate_matches(candidates, matches)
+        if not clusters:
+            logger.info("No multistate clusters detected.")
+            return 0
+
+        # Write to database
+        for cluster in clusters:
+            ms_action = MultistateAction(
+                id=cluster.cluster_id,
+                name=cluster.name,
+                lead_state=cluster.lead_state,
+                participating_states=cluster.states,
+                total_settlement=cluster.total_settlement,
+            )
+            session.add(ms_action)
+
+            # Link child actions
+            for aid in cluster.action_ids:
+                action = session.get(EnforcementAction, aid)
+                if action:
+                    action.multistate_action_id = cluster.cluster_id
+
+        session.commit()
+        logger.info("Created %d multistate_actions records.", len(clusters))
+        return len(clusters)

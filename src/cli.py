@@ -15,11 +15,11 @@ from rich.logging import RichHandler
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.table import Table
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from src.scrapers.registry import get_scraper, get_active_states, state_key_from_code, load_state_configs
 from src.storage.database import Database
-from src.storage.models import EnforcementAction, ScrapeRun
+from src.storage.models import ActionDefendant, EnforcementAction, ScrapeRun
 
 console = Console()
 
@@ -549,6 +549,82 @@ def resolve_entities(ctx):
         for raw, candidate, score in review:
             table.add_row(raw, candidate, f"{score*100:.0f}%")
         console.print(table)
+
+
+@cli.command()
+@click.pass_context
+def validate(ctx):
+    """Run quality checks, entity resolution, and multistate dedup."""
+    from src.normalization.entities import EntityResolver
+    from src.storage.models import Defendant, MonetaryTerms, ViolationCategory
+    from src.validation.dedup import link_multistate_actions
+
+    db: Database = ctx.obj["db"]
+
+    # 1. Quality report
+    console.print("\n[bold blue]Quality Report[/bold blue]")
+    with db.get_session() as session:
+        total = session.execute(
+            select(func.count(EnforcementAction.id))
+        ).scalar_one()
+        low_quality = session.execute(
+            select(func.count(EnforcementAction.id)).where(
+                EnforcementAction.quality_score <= 0.1
+            )
+        ).scalar_one()
+        with_defendants = session.execute(
+            select(func.count(func.distinct(ActionDefendant.action_id)))
+        ).scalar_one() if total else 0
+        with_amounts = session.execute(
+            select(func.count(func.distinct(MonetaryTerms.action_id)))
+        ).scalar_one() if total else 0
+        empty_canonical = session.execute(
+            select(func.count(Defendant.id)).where(Defendant.canonical_name == "")
+        ).scalar_one()
+
+    table = Table(title="Data Quality Summary")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="green", justify="right")
+
+    table.add_row("Total actions", str(total))
+    table.add_row("Low quality (<=0.1)", f"{low_quality} ({low_quality / total * 100:.1f}%)" if total else "0")
+    table.add_row("With defendants", f"{with_defendants} ({with_defendants / total * 100:.1f}%)" if total else "0")
+    table.add_row("With monetary terms", f"{with_amounts} ({with_amounts / total * 100:.1f}%)" if total else "0")
+    table.add_row("Empty canonical names", str(empty_canonical))
+    console.print(table)
+
+    # 2. Entity resolution on unresolved defendants
+    resolver = EntityResolver()
+    with db.get_session() as session:
+        unresolved = session.execute(
+            select(Defendant).where(Defendant.canonical_name == "")
+        ).scalars().all()
+
+    if unresolved:
+        console.print(f"\nResolving [yellow]{len(unresolved)}[/yellow] unresolved defendants...")
+        resolved_count = 0
+        for d in unresolved:
+            canonical, confidence = resolver.resolve(d.raw_name)
+            if canonical:
+                with db.get_session() as session:
+                    db_d = session.get(Defendant, d.id)
+                    if db_d:
+                        db_d.canonical_name = canonical
+                        session.commit()
+                        resolved_count += 1
+        console.print(f"  Resolved [green]{resolved_count}[/green] names.")
+    else:
+        console.print("\n[green]All defendants have canonical names.[/green]")
+
+    # 3. Multistate dedup
+    console.print("\n[bold blue]Multistate Deduplication[/bold blue]")
+    clusters = link_multistate_actions(db)
+    if clusters:
+        console.print(f"  Created [green]{clusters}[/green] multistate action clusters.")
+    else:
+        console.print("  No new multistate clusters found.")
+
+    console.print("\n[bold green]Validation complete.[/bold green]")
 
 
 @cli.command()

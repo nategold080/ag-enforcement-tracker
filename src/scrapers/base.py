@@ -17,7 +17,8 @@ import asyncio
 import logging
 import re
 from abc import ABC
-from datetime import date, datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator, Optional
 from urllib.parse import urljoin, urlparse, urlencode, parse_qs, urlunparse
@@ -30,7 +31,19 @@ from src.validation.schemas import PressRelease, PressReleaseListItem
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_USER_AGENT = "AGEnforcementTracker/1.0 (research project; contact@example.com)"
+@dataclass
+class ScrapeResult:
+    """Result of a full scrape run, including metadata for operational tracking."""
+    press_releases: list  # list[PressRelease]
+    press_releases_found: int = 0
+    actions_extracted: int = 0
+    errors: int = 0
+    error_details: list[dict] = field(default_factory=list)
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    completed_at: datetime | None = None
+
+
+DEFAULT_USER_AGENT = "AGEnforcementTracker/1.0 (academic research project)"
 BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -362,31 +375,43 @@ class BaseScraper(ABC):
         self,
         since: date | None = None,
         max_pages: int = 100,
-    ) -> list[PressRelease]:
+    ) -> ScrapeResult:
         """Full scrape: listing pages → detail pages for each item.
 
-        Returns fully hydrated PressRelease objects with body text.
+        Returns a ScrapeResult with fully hydrated PressRelease objects
+        and operational metadata for the scrape_runs table.
         """
+        started_at = datetime.now(timezone.utc)
         items = await self.scrape_listing(since=since, max_pages=max_pages)
         press_releases: list[PressRelease] = []
         errors = 0
+        error_details: list[dict] = []
 
         for item in items:
             try:
                 pr = await self.scrape_detail(item)
                 press_releases.append(pr)
-            except Exception:
+            except Exception as exc:
                 errors += 1
+                error_details.append({"url": item.url, "error": str(exc)})
                 logger.error(
                     "[%s] Failed to scrape detail for %s",
                     self.state_code, item.url, exc_info=True,
                 )
 
+        completed_at = datetime.now(timezone.utc)
         logger.info(
             "[%s] Scraped %d press releases (%d errors).",
             self.state_code, len(press_releases), errors,
         )
-        return press_releases
+        return ScrapeResult(
+            press_releases=press_releases,
+            press_releases_found=len(items),
+            errors=errors,
+            error_details=error_details,
+            started_at=started_at,
+            completed_at=completed_at,
+        )
 
     # ------------------------------------------------------------------
     # Fixture saving (for tests)

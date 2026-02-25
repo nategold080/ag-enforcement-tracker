@@ -13,7 +13,7 @@ CA_FIXTURES_DIR = FIXTURES_DIR / "california"
 
 @pytest.fixture
 def ca_scraper():
-    """Return a CaliforniaScraper instance."""
+    """Return a BaseScraper instance configured for California."""
     return get_scraper("california")
 
 

@@ -43,8 +43,8 @@ class DecimalEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-def load_actions(db: Database, state: str | None = None, since: date | None = None):
-    """Load all enforcement actions with related data."""
+def load_actions(db: Database, state: str | None = None, since: date | None = None) -> list[dict]:
+    """Load all enforcement actions with related data, returned as flat dicts."""
     with db.get_session() as session:
         stmt = (
             select(EnforcementAction)
@@ -61,7 +61,9 @@ def load_actions(db: Database, state: str | None = None, since: date | None = No
         if since:
             stmt = stmt.where(EnforcementAction.date_announced >= since)
 
-        return session.execute(stmt).unique().scalars().all()
+        actions = session.execute(stmt).unique().scalars().all()
+        # Convert to dicts inside the session to avoid DetachedInstanceError
+        return [action_to_row(a) for a in actions]
 
 
 def action_to_row(a: EnforcementAction) -> dict:
@@ -98,13 +100,12 @@ def action_to_row(a: EnforcementAction) -> dict:
     }
 
 
-def export_csv(actions, output_path: Path):
+def export_csv(rows: list[dict], output_path: Path):
     """Export to CSV."""
-    if not actions:
+    if not rows:
         console.print("[yellow]No actions to export.[/yellow]")
         return
 
-    rows = [action_to_row(a) for a in actions]
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(output_path, "w", newline="", encoding="utf-8") as f:
@@ -115,13 +116,12 @@ def export_csv(actions, output_path: Path):
     console.print(f"Exported [green]{len(rows)}[/green] actions to [cyan]{output_path}[/cyan]")
 
 
-def export_json(actions, output_path: Path):
+def export_json(rows: list[dict], output_path: Path):
     """Export to JSON."""
-    if not actions:
+    if not rows:
         console.print("[yellow]No actions to export.[/yellow]")
         return
 
-    rows = [action_to_row(a) for a in actions]
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(output_path, "w", encoding="utf-8") as f:
@@ -140,13 +140,13 @@ def main(fmt, output_path, state, since, db_path):
     """Export enforcement action data."""
     db = Database(db_path)
     since_date = date.fromisoformat(since) if since else None
-    actions = load_actions(db, state=state, since=since_date)
+    rows = load_actions(db, state=state, since=since_date)
 
     out = Path(output_path)
     if fmt == "csv":
-        export_csv(actions, out)
+        export_csv(rows, out)
     elif fmt == "json":
-        export_json(actions, out)
+        export_json(rows, out)
 
 
 if __name__ == "__main__":

@@ -129,6 +129,16 @@ _NON_ENFORCEMENT_KEYWORDS = [
     "provides update",
     "provides statement",
     "solicitor general",
+    "free help available",
+    "free help for",
+    "plugs free",
+    "one step closer",
+    "animal cruelty",
+    "cruelty to animals",
+    "releases footage",
+    "releases video",
+    "body cam",
+    "body camera",
 ]
 
 
@@ -201,8 +211,8 @@ _HEADLINE_NON_ENFORCEMENT_RE = [
     re.compile(r'(?:names?\s+new|promotes?\s+|establishes?\s+)', re.IGNORECASE),
     # Know your rights / informational
     re.compile(r'(?:know\s+your\s+rights|remains?\s+in\s+effect|certif(?:y|ies)\s+(?:\d+\s+)?(?:initiative|petition))', re.IGNORECASE),
-    # "Bills to..." — legislation
-    re.compile(r'^bills?\s+to\b', re.IGNORECASE),
+    # "Bills to/creates/establishes..." — legislation
+    re.compile(r'^bills?\s+(?:to|creates?|establishes?|provides?|would|authoriz|requires?)\b', re.IGNORECASE),
     # "To Congress / To U.S. Supreme Court" (advocacy briefs)
     re.compile(r'(?:to\s+(?:congress|u\.?s\.?\s+supreme\s+court):)', re.IGNORECASE),
     # "Stands with" — political solidarity
@@ -213,8 +223,40 @@ _HEADLINE_NON_ENFORCEMENT_RE = [
     re.compile(r'(?:remains?\s+illegal\s+to|it\s+remains?\s+illegal)', re.IGNORECASE),
     # "Responds to Court Decision" (commentary, not AG's own action)
     re.compile(r'responds?\s+to\s+(?:court|supreme|u\.?s\.?)', re.IGNORECASE),
+    # Dismantling/eliminating federal agencies (policy opinion, not enforcement)
+    re.compile(r'(?:dismantl|would\s+cause\s+irreparable)\b', re.IGNORECASE),
     # Puts on notice / on notice for (warning, not enforcement action)
     re.compile(r'puts?\s+(?:[\w\s]+)?on\s+notice\b', re.IGNORECASE),
+    # Status updates about existing settlements ("one step closer", "benefits are coming")
+    re.compile(r'(?:one\s+step\s+closer|benefits?\s+(?:are|is)\s+(?:one|coming|on\s+the\s+way))\b', re.IGNORECASE),
+    re.compile(r'(?:court\s+filings?\s+mean|filings?\s+(?:bring|move|mean))\b', re.IGNORECASE),
+    # "Plugs free help" / consumer outreach
+    re.compile(r'plugs?\s+(?:free|resources?)\b', re.IGNORECASE),
+    # Criminal investigation footage/video releases (NY pattern: "Releases Footage from Investigation into")
+    re.compile(r'releases?\s+(?:footage|video|body\s*cam)\s+(?:from|of)\s+(?:investigation|incident)', re.IGNORECASE),
+    # "Investigation into the Death of" — criminal investigation disclosure, not enforcement
+    re.compile(r'investigation\s+into\s+(?:the\s+)?(?:death|killing|shooting)\s+of\b', re.IGNORECASE),
+    # Legislative items: "Bill creates/would/establishes/provides"
+    re.compile(r'\bbills?\s+(?:creates?|would|establishes?|provides?|requires?|authoriz)', re.IGNORECASE),
+    # Consumer outreach / free help patterns
+    re.compile(r'(?:free\s+help|plugs?\s+free|free\s+(?:resource|assistance|service|program))\b', re.IGNORECASE),
+    re.compile(r'(?:help\s+(?:available|for)\s+(?:struggling|homeowners|consumers|residents))\b', re.IGNORECASE),
+    # Animal cruelty / felony criminal charges (criminal cases, not civil enforcement)
+    re.compile(r'\b(?:animal\s+cruelty|animal\s+abuse|felony\s+(?:animal|cruelty|criminal)|cruelty\s+to\s+animals)\b', re.IGNORECASE),
+    re.compile(r'\b(?:felony|misdemeanor)\s+(?:charge|count)s?\s+(?:against|for|in|filed)\b', re.IGNORECASE),
+    # P5: Criminal cases (AG as prosecutor, not civil enforcement)
+    re.compile(r'\b(?:murder|homicide|manslaughter|cold\s+case|serial\s+(?:killer|murder))\b', re.IGNORECASE),
+    # P5: Year-in-review / highlights summaries
+    re.compile(r'highlights?\s+(?:\d+|wins|accomplishments|results)\b', re.IGNORECASE),
+    # P5: Electoral / ballot matters
+    re.compile(r'\b(?:referendum|ballot\s+measure|proposition\s+\d+|initiative\s+\d+)\b', re.IGNORECASE),
+    # P5: Title/Summary Language Certified (ballot measure certification)
+    re.compile(r'title\s+and\s+summary\s+(?:language\s+)?certified', re.IGNORECASE),
+    # P5: Obituaries / memorials (including "passing of [title]")
+    re.compile(r'(?:passing\s+of|death\s+of|mourns?\s+(?:loss|the\s+passing)|in\s+memory\s+of)\b', re.IGNORECASE),
+    # P5: Guilty plea/verdict in criminal murder/assault case (not AG civil enforcement)
+    re.compile(r'(?:guilty|convicted|sentenced)\s+(?:of\s+|in\s+)?(?:murder|manslaughter|homicide|assault|kidnapping)', re.IGNORECASE),
+    re.compile(r'(?:murder|manslaughter|homicide)\s+(?:case|trial|conviction|charge)', re.IGNORECASE),
 ]
 
 
@@ -253,9 +295,16 @@ def _keyword_screen(headline: str, body_first_500: str) -> str:
 # Dollar amount pattern
 _HAS_DOLLAR = re.compile(r'\$\s*[\d,]+(?:\.\d+)?\s*(?:million|billion|thousand)?', re.IGNORECASE)
 
-# Statute/law citation pattern
+# Statute/law citation pattern — require context like "X Act" (named statute)
+# or formal citation patterns. Bare "Act" or "Law" are too broad.
 _HAS_STATUTE = re.compile(
-    r'(?:\b\w+\s+Code\s+(?:section|§)|U\.?S\.?C\.?\s*§|\b(?:Act|Law)\b)',
+    r'(?:'
+    r'\b\w+\s+Code\s+(?:section|§)'             # "Penal Code section"
+    r'|U\.?S\.?C\.?\s*§'                          # "U.S.C. §"
+    r'|\b(?:section|§)\s*\d+'                      # "section 17200", "§ 349"
+    r'|\b\w+(?:\s+\w+)?\s+Act\b'                   # "Clean Air Act", "FTC Act"
+    r'|\b(?:CCPA|COPPA|TCPA|HIPAA|RICO|UDAP|FCRA|RESPA|TILA|FDCPA|CAN-SPAM)\b'  # Named statute acronyms
+    r')',
     re.IGNORECASE,
 )
 
@@ -343,14 +392,15 @@ def is_enforcement_action(headline: str, body_text: str) -> FilterResult:
             reason="Enforcement keywords and/or defendant + enforcement pattern found",
         )
 
-    # Keyword screen passed but pattern validation failed
+    # Keyword screen passed but pattern validation failed — no defendant + amount/statute/court.
+    # These are typically commentary pieces that mention enforcement terms in passing
+    # (e.g., "AG discusses settlement trends" or "statement on civil penalty legislation").
+    # Reject to avoid inflating the dataset with non-enforcement records.
     if screen == "pass":
-        # Enforcement keywords were present but no clear defendant/amount/statute pattern
-        # Still include with lower confidence per CLAUDE.md: "false inclusions are less damaging"
         return FilterResult(
-            is_enforcement=True,
-            stage="keyword_pass_only",
-            reason="Enforcement keywords found but no defendant/amount/statute pattern",
+            is_enforcement=False,
+            stage="keyword_pass_no_pattern",
+            reason="Enforcement keywords found but no defendant/amount/statute pattern — likely commentary",
         )
 
     # Ambiguous with no patterns — reject

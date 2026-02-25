@@ -153,6 +153,7 @@ categories:
       - "internet service"
       - "cramming"
       - "slamming"
+    subcategories: []
 
   charitable:
     name: "Charitable Solicitation / Nonprofit"

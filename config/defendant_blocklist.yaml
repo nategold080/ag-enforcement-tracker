@@ -1,0 +1,288 @@
+# Defendant Blocklist — Maintained separately from code for easy updates.
+#
+# Two sections:
+#   exact_matches: list of strings (case-insensitive, matched against lowercased name)
+#   patterns: list of regex strings (compiled with re.IGNORECASE)
+#
+# Add new entries as garbage names are discovered during scrape runs.
+
+exact_matches:
+  # Legal boilerplate
+  - "is presumed innocent"
+  - "is presumed innocent until proven guilty"
+  - "is presumed innocent until"
+  - "are presumed innocent"
+  - "are presumed innocent unless proved guilty in a court of law"
+  - "presumed innocent until proven guilty"
+  - "innocent until proven guilty"
+  - "proven guilty"
+  - "proved guilty in a court of law"
+
+  # AG offices and officials (not defendants)
+  - "attorney general"
+  - "the attorney general"
+  - "general bonta"
+  - "general james"
+  - "general raoul"
+  - "general rayfield"
+  - "general yost"
+  - "general paxton"
+  - "general miyares"
+  - "general rosenblum"
+  - "attorney general bonta"
+  - "attorney general james"
+  - "attorney general raoul"
+  - "attorney general dan rayfield"
+  - "attorney general dave yost"
+  - "attorney general ken paxton"
+  - "attorney general jason miyares"
+  - "attorney general ellen rosenblum"
+  - "attorney general dan rayfield on court hearing"
+  - "the office of the attorney general"
+  - "the department of justice"
+  - "the district attorney"
+
+  # Generic descriptors
+  - "the company"
+  - "the corporation"
+  - "the defendant"
+  - "the defendants"
+  - "the respondent"
+  - "the state"
+  - "its founder"
+  - "founder"
+  - "its subsidiaries"
+  - "related entities"
+  - "other parties"
+  - "distributors"
+  - "the administration"
+  - "trump administration"
+  - "the trump administration"
+  - "trump administration to protect"
+  - "president trump"
+  - "president donald trump"
+
+  # Common false positives from body text patterns
+  - "natural disasters. by focusing on preparation"
+  - "natural disasters. by focusing on mitigation"
+  - "and 10 individual defendants"
+  - "and 25 individual executives"
+  - "10 individual defendants"
+  - "individual defendants"
+  - "individual executives"
+  - "home décor retailer"
+  - "kratom retailers"
+  - "seafood distributor"
+  - "used-car dealer"
+  - "seller"
+  - "chile"
+
+  # Government/political entities (not defendants in AG actions)
+  - "biden-harris administration"
+  - "biden administration"
+  - "the biden administration"
+  - "biden"
+  - "president biden"
+  - "donald trump"
+  - "investigation"
+  - "notification of"
+  - "consumer alert"
+  - "federal"
+  - "federal law"
+  - "complete"
+  - "election"
+  - "school district"
+  - "predatory lender"
+  - "electric company"
+  - "debt collector"
+  - "insurance company"
+  - "pharmaceutical company"
+  - "drug company"
+  - "online retailer"
+  - "tech company"
+  - "oil company"
+  - "gas company"
+  - "utility company"
+  - "health insurer"
+  - "credit bureau"
+
+  # Generic sentence fragments that match defendant patterns
+  - "help"
+  - "patient"
+  - "them"
+  - "their"
+  - "its owners"
+  - "it owners"
+  - "his"
+  - "her"
+  - "owners"
+  - "owner"
+  - "its parent"
+  - "its ceo"
+  - "his companies"
+  - "her companies"
+  - "guidance"
+  - "guidance to help"
+  - "children"
+  - "ice"
+  - "pharmaceutical"
+  - "real estate"
+  - "business"
+  - "disabilities"
+  - "discrimination"
+  - "sexual harassment"
+  - "mortgage"
+  - "three"
+  - "two"
+  - "four"
+  - "three companies"
+  - "four companies"
+  - "any"
+  - "major"
+  - "operating"
+  - "nation"
+  - "transgender"
+  - "predatory"
+  - "spread of nonconsensual"
+  - "members of the sackler family"
+
+  # Government agency fragments (tails of multi-word proper nouns split on "and")
+  - "drug administration"
+  - "homeland security"
+  - "women act"
+  - "disabilities act"
+  - "drug manufacturers"
+  - "drug companies"
+  - "drug maker"
+  - "drug manufacturer"
+
+  # Government bodies — never defendants in AG enforcement
+  - "u.s. environmental protection agency"
+  - "u.s. postal service"
+  - "u.s. state department"
+  - "u.s. labor department"
+  - "u.s. bureau of land management"
+  - "federal highway administration"
+  - "federal communications commission"
+  - "federal trade commission"
+  - "federal emergency management agency"
+  - "nuclear regulatory commission"
+  - "equal employment opportunity commission"
+  - "transportation commission"
+  - "bureau of alcohol, tobacco, firearms"
+  - "bureau of alcohol"
+  - "social security"
+  - "harris county commissioners court"
+
+  # Generic role descriptors (not specific company names)
+  - "debt collection agency"
+  - "online travel agency"
+  - "staffing agency"
+  - "state housing agency"
+  - "mandatory poster agency"
+  - "health agency"
+  - "home health agency"
+
+  # Headlines/fragments that leak through as defendant names
+  - "press release ag"
+  - "acting tax commissioner"
+  - "county school board"
+  - "college board"
+  - "high court"
+
+  # Specific garbage names identified in data audit
+  - "unlawfully cutting billions"
+  - "consumers is"
+  - "over hud policy that would"
+  - "human trafficker"
+  - "human trafficking"
+  - "human traffickers"
+
+  # Garbage names found in data quality audit (2026-02)
+  - "during the"
+  - "during the inc"
+  - "e-cigarette"
+  - "e-cigarettes"
+  - "cryptocurrency"
+  - "cryptocurrency platform"
+  - "cryptocurrency companies"
+  - "crypto firm"
+  - "mortgage servicer"
+  - "everett man"
+  - "seattle business"
+  - "companies"
+  - "funding"
+  - "centers"
+  - "patients"
+  - "paul means"
+  - "blayne m. perez"
+  - "blayne m"
+
+patterns:
+  # State/county/city entities
+  - '^(?:the\s+)?(?:state|county|city|town|district)\s+of\b'
+  # AG/DA titles
+  - '^(?:attorney|district)\s+general'
+  # Legal proceedings language
+  - '\b(?:presumed|innocent|guilty|convicted)\b'
+  # Bare articles/pronouns
+  - '^(?:a|an|the|this|that|these|those|his|her|its|their)\s*$'
+  # Numbered individual defendants
+  - '^\d+\s+individual\s+'
+  # Bare honorifics
+  - '^(?:mr|mrs|ms|dr)\.?\s*$'
+  # Court orders (not defendants)
+  - '^court\s+orders?\b'
+  # Generic violation descriptions
+  - '\b(?:violations?|protection|practices|fraud)\s*$'
+  # Pure numbers
+  - '^\d+$'
+  # "N Companies/Businesses" pattern
+  - '^\d+\s+(?:companies|businesses|firms|individuals|defendants)'
+  # Generic role descriptions
+  - '^(?:federal|state|local)\s+(?:government|officials|agencies)'
+  # Government agency tail fragments
+  - '^(?:drug|highway|transit|veterans?)\s+administration\b'
+  - '\b(?:commission|agency|bureau|department)\s*$'
+  # Law name fragments
+  - '\b(?:women|disabilities|privacy|recovery|consumer\s+privacy|clean\s+air|clean\s+water)\s+act\b'
+  # "Press Release AG..." headlines captured as names
+  - '^press\s+release\b'
+  # "Acting [Title]" captured as a name
+  - '^acting\s+(?:tax|attorney|district|commissioner)'
+  # Generic industry descriptors
+  - '(?:^|\b)(?:drug|opioid|pharmaceutical|tobacco|e-?cigarette|generic)\s+(?:maker|manufacturer|distributor|company|companies)s?\b'
+  # Police departments
+  - '\bpolice\s+department\b'
+  # FDA
+  - '\bfood\s+(?:&|and)\s+drug\s+administration\b'
+  # Count-word + generic noun
+  - '^(?:two|three|four|five|six|seven|eight|nine|ten)\s+(?:drug|opioid|companies|businesses|defendants?|suspects?|people|victims?|officers?|providers?|manufacturers?|agencies)'
+  # "Settlement With N" pattern
+  - '^settlement\s+with\b'
+  # Single-word common nouns
+  - '^(?:act|law|rule|order|notice|plan|claim|grant|relief|report|matter|issue|charge|damage|harm|risk|abuse|penalty|complaint|violation|statute|settlement|enforcement|authority|oversight|guidance|protection|measure|effort|failure|impact|safety|access|companies|funding|centers|patients|mortgage)$'
+  # "[Place]-Based Company That"
+  - '-based\s+company\b'
+  # "Largest/Biggest XXXX Settlement"
+  - '\blargest\s+\w+\s+settlement\b'
+  # Fragments starting with adverbs
+  - '^(?:unlawfully|illegally|fraudulently|knowingly|willfully)\s+'
+  # "[Place] man/woman/business/resident" patterns (WA headline patterns)
+  - '^\w+(?:\s+\w+)?\s+(?:man|woman|men|women|business|resident|couple|family)$'
+  # Headline fragments containing "for [gerund]" — always a sentence tail, not a name
+  - '\bfor\s+(?:deceiving|misleading|defrauding|violating|failing|scamming|harming|exploiting|overcharging|deceptive)\b'
+  # "Owner [Company] for" — headline fragment with "Owner" prefix
+  - '\bowner\s+\w+\s+for\b'
+  # Generic cryptocurrency/e-cigarette descriptors (not company names)
+  - '^(?:crypto(?:currency)?|e-?cigarettes?|vaping)\s+(?:platform|companies|company|firm|firms|exchange|exchanges|lender|lenders|broker)s?(?:\s|$)'
+  - '^(?:crypto(?:currency)?\s+)?(?:platform|companies|company|firm|firms|exchange|lender|broker)s?\s+\w+'
+  # Truncated names ending with incomplete words
+  - '\bsinc$'
+  - '\blow-$'
+  # "Consumers Is/Are" — sentence fragment
+  - '^consumers?\s+(?:is|are|was|were|has|have)\b'
+  # "Over [Policy/HUD/Something] that Would"
+  - '^over\s+(?:hud|the|a|an|its)\b'
+  # Single-word generic role nouns
+  - '^(?:trafficker|lender|borrower|manufacturer|distributor|retailer|contractor|employer|provider|operator|vendor|dealer|broker)s?$'
