@@ -1205,9 +1205,7 @@ announcements, and legislative commentary. Our two-stage filter
 A higher filter rate indicates more non-enforcement content on that state's website.
 """.format(n_states=total_states))
 
-    st.markdown("""**Active coverage:** CA, NY, TX, WA, MA, OH, OR — representing the largest
-and most active AG offices in the country. Additional states are being
-onboarded continuously.""")
+    st.markdown("**Active coverage:** CA, NY, TX, WA, MA, OH, OR — representing the largest and most active AG offices in the country. Additional states are being onboarded.")
 
     # ── About / Methodology ──────────────────────────────────────────
     with st.expander("About This Data / Methodology", expanded=False):
