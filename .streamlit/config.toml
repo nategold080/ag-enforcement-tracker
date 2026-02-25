@@ -1,6 +1,8 @@
 [server]
 headless = true
 maxUploadSize = 5
+enableCORS = false
+enableXsrfProtection = false
 
 [theme]
 base = "dark"
