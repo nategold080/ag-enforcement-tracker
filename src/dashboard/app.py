@@ -992,11 +992,12 @@ def main():
                 color_discrete_sequence=[ACCENT_BLUE],
                 labels={"count": "Actions", "label": ""},
             )
+            max_count = int(cat_counts["count"].max())
             fig_cats.update_layout(
-                margin=dict(l=0, r=20, t=10, b=0),
+                margin=dict(l=0, r=60, t=10, b=0),
                 height=400,
                 yaxis=dict(autorange="reversed"),
-                xaxis=dict(title=""),
+                xaxis=dict(title="", range=[0, max_count * 1.22]),
                 plot_bgcolor="rgba(0,0,0,0)",
             )
             fig_cats.update_traces(
