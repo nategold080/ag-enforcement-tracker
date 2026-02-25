@@ -689,7 +689,7 @@ def main():
         display_ms = multistate_df.copy()
         st.dataframe(
             display_ms[["Company", "States Targeted", "Total Actions", "States"]],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             height=min(len(display_ms) * 36 + 40, 520),
             column_config={
@@ -779,7 +779,7 @@ def main():
                         "amount_display": "Amount",
                     }
                 ),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 height=min(total_matches * 36 + 40, 400),
             )
@@ -820,7 +820,7 @@ def main():
 
             st.dataframe(
                 display_settle[["Date", "Scope", "Headline", "Amount"]],
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 height=min(len(display_settle) * 36 + 40, 420),
                 column_config={
@@ -906,7 +906,7 @@ def main():
                     "amount_display": "Amount",
                 }
             ),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             height=min(20 * 36 + 40, 520),
         )
@@ -955,7 +955,7 @@ def main():
                 tickfont=dict(size=11),
             ),
         )
-        st.plotly_chart(fig_map, use_container_width=True)
+        st.plotly_chart(fig_map, width="stretch")
 
     with cat_col:
         st.markdown(
@@ -989,7 +989,7 @@ def main():
                 textposition="outside",
                 textfont=dict(size=11),
             )
-            st.plotly_chart(fig_cats, use_container_width=True)
+            st.plotly_chart(fig_cats, width="stretch")
 
     # ── Row: Category Trends + Action Type Breakdown ───────────────────
     trend_col, type_col = st.columns([3, 2])
@@ -1031,7 +1031,7 @@ def main():
                 xaxis=dict(dtick=1),
             )
             fig_trend.update_traces(line=dict(width=2.5))
-            st.plotly_chart(fig_trend, use_container_width=True)
+            st.plotly_chart(fig_trend, width="stretch")
 
     with type_col:
         st.markdown(
@@ -1066,7 +1066,7 @@ def main():
                 textinfo="percent+label",
                 textfont=dict(size=10),
             )
-            st.plotly_chart(fig_types, use_container_width=True)
+            st.plotly_chart(fig_types, width="stretch")
 
     # ── Year-over-Year Enforcement Volume ────────────────────────────
     st.markdown(
@@ -1132,7 +1132,7 @@ def main():
                 showarrow=False, yshift=12,
                 font=dict(size=12, weight="bold"),
             )
-        st.plotly_chart(fig_yoy, use_container_width=True)
+        st.plotly_chart(fig_yoy, width="stretch")
 
     # ── Top Defendants Bar Chart ───────────────────────────────────────
     st.markdown(
@@ -1164,7 +1164,7 @@ def main():
             xaxis=dict(title="", showgrid=False, showticklabels=False),
             yaxis=dict(title=""),
         )
-        st.plotly_chart(fig_defs, use_container_width=True)
+        st.plotly_chart(fig_defs, width="stretch")
 
     # ── Data Coverage ────────────────────────────────────────────────
     st.markdown(
@@ -1189,7 +1189,7 @@ def main():
             )
             st.dataframe(
                 display_cov[["State", "Code", "Active Records", "Total Scraped", "Date Range", "Filter Rate"]],
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 height=min(len(display_cov) * 36 + 40, 400),
                 column_config={
