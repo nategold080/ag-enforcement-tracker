@@ -542,9 +542,10 @@ def load_company_search_data() -> pd.DataFrame:
 # ── Page layout ───────────────────────────────────────────────────────────
 
 def main():
+    favicon = Path(__file__).resolve().parent.parent.parent / ".streamlit" / "favicon.png"
     st.set_page_config(
         page_title="State AG Enforcement Tracker",
-        page_icon=":scales:",
+        page_icon=str(favicon) if favicon.exists() else ":scales:",
         layout="wide",
         initial_sidebar_state="collapsed",
     )
@@ -1263,6 +1264,10 @@ structure enforcement action data from state Attorney General press releases:
         "<div style='text-align: center; color: #94A3B8; font-size: 0.8rem; padding: 8px 0;'>"
         "State AG Enforcement Tracker &bull; Data sourced from official state Attorney General press releases &bull; "
         "Automated pipeline: scrape &rarr; extract &rarr; normalize &rarr; classify"
+        "<br>"
+        "Built by <strong>Nathan Goldberg</strong> &nbsp;|&nbsp; "
+        "<a href='mailto:nathanmauricegoldberg@gmail.com' style='color: #0984E3; text-decoration: none;'>nathanmauricegoldberg@gmail.com</a> &nbsp;|&nbsp; "
+        "<a href='https://www.linkedin.com/in/nathan-goldberg-62a44522a' target='_blank' style='color: #0984E3; text-decoration: none;'>LinkedIn</a>"
         "</div>",
         unsafe_allow_html=True,
     )
