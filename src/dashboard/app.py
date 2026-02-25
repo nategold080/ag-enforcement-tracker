@@ -1203,13 +1203,11 @@ actions — AGs also publish consumer alerts, policy statements, personnel
 announcements, and legislative commentary. Our two-stage filter
 (keyword screen + pattern validation) removes non-enforcement content.
 A higher filter rate indicates more non-enforcement content on that state's website.
-
-**Active coverage:** CA, NY, TX, WA, MA, OH, OR — representing the largest
-and most active AG offices in the country. Additional states are being
-onboarded continuously.
 """.format(n_states=total_states))
 
-    st.markdown("")
+    st.markdown("""**Active coverage:** CA, NY, TX, WA, MA, OH, OR — representing the largest
+and most active AG offices in the country. Additional states are being
+onboarded continuously.""")
 
     # ── About / Methodology ──────────────────────────────────────────
     with st.expander("About This Data / Methodology", expanded=False):
