@@ -7,15 +7,14 @@ Run: streamlit run src/dashboard/app.py
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
-from decimal import Decimal
-
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from sqlalchemy import select, func, desc, distinct, and_, Integer
+from sqlalchemy import select, func, desc, distinct, and_, cast, Integer
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -81,6 +80,113 @@ PALETTE = [
     "#0984E3", "#6C5CE7", "#00B894", "#E17055", "#FDCB6E",
     "#74B9FF", "#A29BFE", "#55EFC4", "#FF7675", "#DFE6E9",
 ]
+
+
+# ── Display-level data quality filters ────────────────────────────────────
+# These catch garbage that slipped past extraction. Root cause fixes belong
+# in extractors/patterns.py and config/defendant_blocklist.yaml; these are
+# the safety net so the dashboard never shows embarrassing entries.
+
+# Exact canonical names to suppress (case-insensitive comparison)
+_DEFENDANT_DISPLAY_BLOCKLIST: set[str] = {
+    # Generic terms that aren't company names
+    "mortgage", "mortgage servicer", "e-cigarette", "cryptocurrency",
+    "companies", "funding", "centers", "owners", "patients",
+    "consumers is", "federal government", "telecommunications",
+    "statement", "biotechnology", "national", "student", "software",
+    "services", "territories", "construction", "marketing", "providers",
+    "health", "firm", "oil", "opioid", "tips", "colleges",
+    "cryptocurrency platform", "cryptocurrency trading",
+    "cryptocurrency markets", "another cryptocurrency",
+    # Headline fragments / descriptions mistaken for names
+    "during the", "everett man", "seattle business",
+    "huntington beach sinc", "paul means",
+    # Criminal case individuals/businesses (not corporate enforcement)
+    "blayne m", "blayne m. perez",
+    "federal way discount guns",
+    # AG names extracted as defendants
+    "ag ferguson", "ag yost", "ag paxton", "ag bonta", "ag james",
+    "ag healey", "ag campbell", "ag rayfield",
+}
+
+# Merge duplicate entity names for display. Maps variant -> canonical.
+_DEFENDANT_MERGE_MAP: dict[str, str] = {
+    "Juul Labs": "Juul",
+    "ByteDance": "TikTok",
+    "Tik Tok": "TikTok",
+    "Sacklers": "Sackler Family",
+    "Purdue": "Purdue Pharma",
+    "Marriott International": "Marriott",
+}
+
+# Regex patterns — if any match (case-insensitive), suppress the name
+_DEFENDANT_DISPLAY_PATTERNS: list[re.Pattern] = [
+    re.compile(p, re.IGNORECASE) for p in [
+        r"^cryptocurrency\b",        # "Cryptocurrency Companies Gemini...", etc.
+        r"^crypto\s+firm\b",         # "Crypto Firm Genesis Global Capital"
+        r"^former\s+ceo\s+of\b",     # "Former CEO of Celsius..."
+        r"\bfor\s+deceiving\b",      # "TurboTax Owner Intuit for Deceiving Low-"
+        r"\bman$",                    # "Everett man", "Tacoma man"
+        r"\bbusiness$",              # "Seattle business"
+        r"\bwoman$",                 # "Spokane woman"
+        r"^(?:two|three|four|five|six|seven|eight|nine|ten)\s+",  # "Three Companies"
+        r"^(?:a|an|the)\s+",         # "A Cryptocurrency Company"
+        r"\bowner\b.*\bfor\b",       # "TurboTax Owner Intuit for..."
+        r"^maker\s+of\b",           # "Maker of Opioid Addiction Treatment Drug"
+        r"^\d+\s+corporate\b",      # "30 Corporate Defendants"
+        r"^joint\s+statement\b",    # "Joint Statement on Lawsuit..."
+        r"^multistate\b",           # "Multistate Coalition"
+        r"^illegally\b",            # "Illegally Cutting Funds"
+        r"^unlawfully\b",           # "Unlawfully Cutting Billions"
+    ]
+]
+
+# Headlines in the settlements table that indicate non-enforcement items
+_SETTLEMENT_HEADLINE_BLOCKLIST: list[re.Pattern] = [
+    re.compile(p, re.IGNORECASE) for p in [
+        r"\bbill\s+creates\b",                   # Legislative items
+        r"\blegislat",                            # Legislative items
+        r"\bdismantling\s+cfpb\b",                # Policy advocacy
+        r"\bfree\s+help\s+available\b",           # Consumer outreach
+        r"\bcheck\s+the\s+mail\b",                # Consumer outreach
+        r"\bplugs\s+free\s+help\b",               # Consumer outreach
+        r"\bhomeowners?\s+(?:can|should|may)\b",   # Consumer tips
+        r"\bconsumer\s+(?:tips?|alert)\b",         # Consumer alerts
+        r"\bone\s+step\s+closer\b",               # Settlement status updates
+        r"\bbenefits\s+are\s+one\s+step\b",        # Settlement status updates
+        r"\bproviding\s+huge\s+benefits\b",        # Settlement follow-up press
+        r"\bstruggling\b.*\bhomeowners?\b",        # Consumer outreach
+        r"\bcourt\s+decision\s+allowing\s+states\s+to\s+participate\b",  # Procedural rulings
+        r"^(?:june|july|august|september|october|november|december|january|february|march|april|may)\s+\d",  # Body text leaked as headline
+        r"^olympia\s*[-–—]",                          # WA body text leaked as headline
+        r"^the\s+money\s+is\b",                       # Body text leaked as headline
+        r"^\w+\s*[-–—]\s*\w+\s+\d{1,2},\s*\d{4}",    # "City - Month DD, YYYY" body text leak
+        r"\bconsumers?\s+will\s+benefit\b",            # Settlement benefit announcement, not action
+    ]
+]
+
+
+def _is_clean_defendant(name: str) -> bool:
+    """Return True if the defendant name is suitable for display."""
+    if not name or len(name) <= 3:
+        return False
+    low = name.strip().lower()
+    if low in _DEFENDANT_DISPLAY_BLOCKLIST:
+        return False
+    for pat in _DEFENDANT_DISPLAY_PATTERNS:
+        if pat.search(name):
+            return False
+    return True
+
+
+def _is_clean_settlement_headline(headline: str) -> bool:
+    """Return True if the settlement headline looks like a real enforcement action."""
+    if not headline:
+        return False
+    for pat in _SETTLEMENT_HEADLINE_BLOCKLIST:
+        if pat.search(headline):
+            return False
+    return True
 
 
 # ── Data loading ──────────────────────────────────────────────────────────
@@ -163,8 +269,9 @@ def load_monetary_df() -> pd.DataFrame:
 def _dedup_settlements(df: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
     """Deduplicate multistate settlements by grouping on similar amounts and dates.
 
-    Since multistate_action_id is not populated, we group settlements with the
-    same dollar amount that appear from multiple states within ~1 year.
+    Uses the is_multistate flag as a primary signal — multistate actions get
+    wider matching tolerances since different states may announce the same
+    settlement months apart with slightly different reported amounts.
     Returns one row per unique settlement with state count.
     """
     if df.empty:
@@ -182,16 +289,26 @@ def _dedup_settlements(df: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
 
         amt = row["amount"]
         dt = row["date"]
+        is_ms = row.get("is_multistate", False)
 
-        # Find all rows with same amount (within 1%) and dates within 365 days
+        # Multistate actions get wider tolerances: states announce the same
+        # settlement at different times and may round amounts differently
+        if is_ms:
+            amt_tol = 0.05   # 5% for multistate
+            date_tol = pd.Timedelta(days=1460)  # 4 years — states announce same settlement years apart
+        else:
+            amt_tol = 0.01   # 1% for single-state
+            date_tol = pd.Timedelta(days=365)
+
         mask = (
             (~df.index.isin(used)) &
-            (df["amount"].between(amt * 0.99, amt * 1.01)) &
-            ((df["date"] - dt).abs() <= pd.Timedelta(days=365))
+            (df["amount"].between(amt * (1 - amt_tol), amt * (1 + amt_tol))) &
+            ((df["date"] - dt).abs() <= date_tol)
         )
         cluster = df[mask]
 
         states = sorted(cluster["state"].unique())
+        any_multistate = cluster["is_multistate"].any()
         used.update(cluster.index)
 
         groups.append({
@@ -200,7 +317,7 @@ def _dedup_settlements(df: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
             "date": dt,
             "state": ", ".join(states) if len(states) > 1 else states[0],
             "state_count": len(states),
-            "is_multistate": len(states) > 1 or row.get("is_multistate", False),
+            "is_multistate": any_multistate or len(states) > 1,
         })
 
         if len(groups) >= top_n:
@@ -264,10 +381,21 @@ def load_defendants_df() -> pd.DataFrame:
             .order_by(desc("action_count"))
         ).all()
 
-        return pd.DataFrame(
+        df = pd.DataFrame(
             [{"Company": r[0], "Actions": r[1], "States": r[2],
               "State List": r[3]} for r in rows]
         ) if rows else pd.DataFrame()
+
+        if not df.empty:
+            df = df[df["Company"].apply(_is_clean_defendant)]
+            # Merge duplicate entity names and re-aggregate
+            df["Company"] = df["Company"].replace(_DEFENDANT_MERGE_MAP)
+            df = (
+                df.groupby("Company", as_index=False)
+                .agg({"Actions": "sum", "States": "max", "State List": "first"})
+                .sort_values("Actions", ascending=False)
+            )
+        return df
 
 
 @st.cache_data(ttl=120)
@@ -300,39 +428,32 @@ def load_multistate_df() -> pd.DataFrame:
         )
         rows = session.execute(subq).all()
 
-        # Also get settlement amounts per company
-        settle_map: dict[str, float] = {}
-        for r in rows:
-            company = r[0]
-            amt = session.execute(
-                select(func.sum(MonetaryTerms.total_amount))
-                .select_from(MonetaryTerms)
-                .join(EnforcementAction, EnforcementAction.id == MonetaryTerms.action_id)
-                .join(ActionDefendant, ActionDefendant.action_id == EnforcementAction.id)
-                .join(Defendant, Defendant.id == ActionDefendant.defendant_id)
-                .where(
-                    and_(
-                        Defendant.canonical_name == company,
-                        MonetaryTerms.total_amount > 0,
-                        MonetaryTerms.amount_is_estimated == False,
-                        EnforcementAction.quality_score > MIN_QUALITY,
-                    )
-                )
-            ).scalar()
-            settle_map[company] = float(amt) if amt else 0.0
+        # Filter out garbage names
+        rows = [r for r in rows if _is_clean_defendant(r[0])]
 
         data = []
         for r in rows:
-            total = settle_map.get(r[0], 0)
             data.append({
                 "Company": r[0],
                 "States Targeted": r[1],
                 "Total Actions": r[2],
                 "States": r[3],
-                "Settlements ($M)": round(total / 1e6, 1) if total else None,
             })
 
-    return pd.DataFrame(data) if data else pd.DataFrame()
+    df = pd.DataFrame(data) if data else pd.DataFrame()
+    if not df.empty:
+        # Merge duplicate entity names (e.g. "Juul" + "Juul Labs")
+        df["Company"] = df["Company"].replace(_DEFENDANT_MERGE_MAP)
+        df = (
+            df.groupby("Company", as_index=False)
+            .agg({
+                "States Targeted": "max",
+                "Total Actions": "sum",
+                "States": "first",
+            })
+            .sort_values(["States Targeted", "Total Actions"], ascending=[False, False])
+        )
+    return df
 
 
 @st.cache_data(ttl=120)
@@ -345,7 +466,7 @@ def load_coverage_df() -> pd.DataFrame:
                 EnforcementAction.state,
                 func.count().label("total_scraped"),
                 func.sum(
-                    func.cast(
+                    cast(
                         EnforcementAction.quality_score > MIN_QUALITY,
                         Integer,
                     )
@@ -400,7 +521,7 @@ def load_company_search_data() -> pd.DataFrame:
             .order_by(desc(EnforcementAction.date_announced))
         ).all()
 
-        return pd.DataFrame(
+        df = pd.DataFrame(
             [{
                 "company": r[0],
                 "state": r[1],
@@ -411,6 +532,11 @@ def load_company_search_data() -> pd.DataFrame:
                 "amount": float(r[6]) if r[6] else None,
             } for r in rows]
         ) if rows else pd.DataFrame()
+
+        if not df.empty:
+            df = df[df["company"].apply(_is_clean_defendant)]
+            df["company"] = df["company"].replace(_DEFENDANT_MERGE_MAP)
+        return df
 
 
 # ── Page layout ───────────────────────────────────────────────────────────
@@ -434,14 +560,14 @@ def main():
         font-family: 'Inter', sans-serif;
         font-size: 2.2rem;
         font-weight: 700;
-        color: #1B2A4A;
+        color: #FFFFFF;
         margin-bottom: 0;
         line-height: 1.2;
     }
     .main-subtitle {
         font-family: 'Inter', sans-serif;
         font-size: 1.05rem;
-        color: #64748B;
+        color: #94A3B8;
         margin-top: 2px;
         margin-bottom: 1.2rem;
     }
@@ -473,7 +599,7 @@ def main():
         font-family: 'Inter', sans-serif;
         font-size: 1.25rem;
         font-weight: 600;
-        color: #1B2A4A;
+        color: #FFFFFF;
         margin-top: 0.8rem;
         margin-bottom: 0.4rem;
         padding-bottom: 0.3rem;
@@ -522,13 +648,6 @@ def main():
     date_min = actions_df["date"].min()
     date_max = actions_df["date"].max()
 
-    # Compute total settlements (cap individual records at $30B for display sanity)
-    if not monetary_df.empty:
-        capped = monetary_df["amount"].clip(upper=30e9)
-        total_settlements_val = capped.sum()
-    else:
-        total_settlements_val = 0
-
     st.markdown(
         f'<p class="main-subtitle">{total_actions:,} enforcement actions across {total_states} states, '
         f'tracking {total_defendants:,} defendants &mdash; structured, searchable, and ready for analysis</p>',
@@ -543,10 +662,7 @@ def main():
     with k2:
         st.metric("States Tracked", f"{total_states}")
     with k3:
-        if total_settlements_val >= 1e9:
-            st.metric("Total Settlements", f"${total_settlements_val / 1e9:.1f}B")
-        else:
-            st.metric("Total Settlements", f"${total_settlements_val / 1e6:.0f}M")
+        st.metric("Defendants Tracked", f"{total_defendants:,}")
     with k4:
         st.metric("Date Range", f"{date_min.year}\u2013{date_max.year}")
 
@@ -561,12 +677,8 @@ def main():
 
     if not multistate_df.empty:
         display_ms = multistate_df.copy()
-        # Format settlement column
-        display_ms["Settlements ($M)"] = display_ms["Settlements ($M)"].apply(
-            lambda x: f"${x:,.1f}" if x and x > 0 else "—"
-        )
         st.dataframe(
-            display_ms[["Company", "States Targeted", "Total Actions", "States", "Settlements ($M)"]],
+            display_ms[["Company", "States Targeted", "Total Actions", "States"]],
             use_container_width=True,
             hide_index=True,
             height=min(len(display_ms) * 36 + 40, 520),
@@ -574,10 +686,25 @@ def main():
                 "Company": st.column_config.TextColumn("Company", width="medium"),
                 "States Targeted": st.column_config.NumberColumn("States", width="small"),
                 "Total Actions": st.column_config.NumberColumn("Actions", width="small"),
-                "States": st.column_config.TextColumn("States Involved", width="medium"),
-                "Settlements ($M)": st.column_config.TextColumn("Settlements ($M)", width="small"),
+                "States": st.column_config.TextColumn("States Involved", width="large"),
             },
         )
+
+    # ── Multistate Statistics Row ──────────────────────────────────────
+    ms_actions = actions_df[actions_df["is_multistate"] == True] if not actions_df.empty else pd.DataFrame()
+    ms_count = len(ms_actions)
+    ms_pct = (ms_count / total_actions * 100) if total_actions > 0 else 0
+
+    # Average states per multistate action (from the multistate_df targets)
+    avg_states = multistate_df["States Targeted"].mean() if not multistate_df.empty else 0
+
+    ms1, ms2, ms3 = st.columns(3)
+    with ms1:
+        st.metric("Multistate Actions", f"{ms_count:,}")
+    with ms2:
+        st.metric("% of All Actions", f"{ms_pct:.1f}%")
+    with ms3:
+        st.metric("Avg States per Target", f"{avg_states:.1f}")
 
     st.markdown("")
 
@@ -655,19 +782,31 @@ def main():
     st.caption("Top 10 unique settlements — multistate actions shown once with participating state count")
 
     if not monetary_df.empty:
-        top_settlements = _dedup_settlements(monetary_df, top_n=10)
+        clean_monetary = monetary_df[monetary_df["headline"].apply(_is_clean_settlement_headline)]
+        # Request extra rows so we still have 10 after amount-level dedup
+        top_settlements = _dedup_settlements(clean_monetary, top_n=20)
         if not top_settlements.empty:
             display_settle = top_settlements.copy()
             display_settle["Amount"] = display_settle["amount"].apply(
                 lambda x: f"${x / 1e9:.1f}B" if x >= 1e9 else (f"${x / 1e6:.1f}M" if x >= 1e6 else f"${x:,.0f}")
             )
+            # Drop duplicate display amounts (e.g. two "$7.4B" Purdue entries) — keep first (highest state count)
+            display_settle = display_settle.drop_duplicates(subset="Amount", keep="first").head(10)
             display_settle["Date"] = pd.to_datetime(display_settle["date"]).dt.strftime("%Y-%m-%d")
             display_settle["Scope"] = display_settle.apply(
                 lambda r: f"{r['state_count']}-state multistate" if r["state_count"] > 1
                 else ("Multistate" if r["is_multistate"] else r["state"]),
                 axis=1,
             )
-            display_settle["Headline"] = display_settle["headline"].str[:80]
+            # Clean up headline display artifacts
+            display_settle["Headline"] = (
+                display_settle["headline"]
+                .str.replace(r"^Press\s*Release\s*(?=AG\b)", "Press Release: ", regex=True)
+                .str.replace(r"(?<=[a-z])(?=[A-Z])", " ", regex=True)  # "fromCVS" -> "from CVS"
+                .str.replace(r"(?<=[A-Z]{2})(?=[a-z])", " ", regex=True)  # "CVSand" -> "CVS and"
+                .str.replace(r"(\$\d+(?:\.\d+)?)(?=[A-Z])", r"\1 ", regex=True)  # "$21Billion" -> "$21 Billion"
+                .str[:80]
+            )
 
             st.dataframe(
                 display_settle[["Date", "Scope", "Headline", "Amount"]],
@@ -691,7 +830,41 @@ def main():
     )
     st.caption("The 20 most recent enforcement actions in the dataset")
 
-    recent_df = actions_df.nlargest(20, "date").copy()
+    # Filter recent actions: deduplicate by headline and remove non-enforcement items
+    _recent_sorted = actions_df.sort_values("date", ascending=False).copy()
+    # Exclude "other" action type — these are unclassified / likely non-enforcement
+    _recent_sorted = _recent_sorted[_recent_sorted["action_type"] != "other"]
+    # Drop duplicate headlines (e.g. same press release appearing in multiple rows)
+    _recent_sorted = _recent_sorted.drop_duplicates(subset="headline", keep="first")
+    # Remove headlines that look like policy statements / non-enforcement
+    _RECENT_HEADLINE_REJECT = [
+        re.compile(p, re.IGNORECASE) for p in [
+            r"\bany\s+federal\s+legislation\b",
+            r"\btransparency\s+and\s+accountability\b",
+            r"\bmust\s+allow\s+states\b",
+            r"\bfoundation\s+of\s+good\s+law\b",
+            r"\bstatement\s+on\b",
+            r"\bissues?\s+statement\b",
+            r"\bconsumer\s+alert\b",
+            r"\bconsumer\s+tips?\b",
+            r"\burges?\b",
+            r"\boppos(?:es?|ing)\s+(?:trump|biden|federal)\b",
+            r"^press\s*release\s*(?:ag|attorney)\b",  # "Press ReleaseAG Campbell..."
+            r"\bplead(?:ed|s)?\s+guilty\s+in\s+(?:mahoning|valley).*trafficking\b",  # criminal case, not civil
+            r"\blegal\s+observation\s+project\b",  # AG monitoring, not enforcement
+            r"\bto\s+monitor\s+federal\b",         # AG monitoring federal activity
+        ]
+    ]
+    _recent_sorted = _recent_sorted[
+        ~_recent_sorted["headline"].apply(
+            lambda h: any(p.search(h) for p in _RECENT_HEADLINE_REJECT) if h else False
+        )
+    ]
+    # Clean up "Press ReleaseAG" prefixes
+    _recent_sorted["headline"] = _recent_sorted["headline"].str.replace(
+        r"^Press\s*Release\s*(?=AG\b)", "Press Release: ", regex=True
+    )
+    recent_df = _recent_sorted.head(20).copy()
     if not recent_df.empty:
         # Join with monetary data for amounts
         if not monetary_df.empty:
@@ -884,6 +1057,72 @@ def main():
                 textfont=dict(size=10),
             )
             st.plotly_chart(fig_types, use_container_width=True)
+
+    # ── Year-over-Year Enforcement Volume ────────────────────────────
+    st.markdown(
+        '<p class="section-header">Enforcement Volume by Year</p>',
+        unsafe_allow_html=True,
+    )
+
+    if not actions_df.empty:
+        # Focus on years with meaningful data
+        yoy_df = actions_df[actions_df["year"].between(2022, 2026)].copy()
+        yoy_counts = yoy_df.groupby("year").size().reset_index(name="count")
+
+        # Split multistate vs single-state for stacked bar
+        yoy_ms = yoy_df[yoy_df["is_multistate"] == True].groupby("year").size().reset_index(name="multistate")
+        yoy_single = yoy_df[yoy_df["is_multistate"] == False].groupby("year").size().reset_index(name="single_state")
+        yoy_stacked = yoy_counts.merge(yoy_ms, on="year", how="left").merge(yoy_single, on="year", how="left").fillna(0)
+
+        # Sort chronologically
+        import datetime
+        current_year = datetime.date.today().year
+        yoy_stacked = yoy_stacked.sort_values("year").reset_index(drop=True)
+
+        # Use numeric x-axis with custom tick labels for "(YTD)"
+        tick_labels = [f"{int(y)} (YTD)" if int(y) == current_year else str(int(y))
+                       for y in yoy_stacked["year"]]
+
+        fig_yoy = go.Figure()
+        fig_yoy.add_trace(go.Bar(
+            x=yoy_stacked["year"],
+            y=yoy_stacked["single_state"],
+            name="Single-State",
+            marker=dict(color=ACCENT_BLUE, cornerradius=4),
+        ))
+        fig_yoy.add_trace(go.Bar(
+            x=yoy_stacked["year"],
+            y=yoy_stacked["multistate"],
+            name="Multistate",
+            marker=dict(color="#F39C12", cornerradius=4),
+        ))
+        fig_yoy.update_layout(
+            barmode="stack",
+            margin=dict(l=0, r=0, t=30, b=0),
+            height=350,
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(
+                title="",
+                tickmode="array",
+                tickvals=yoy_stacked["year"].tolist(),
+                ticktext=tick_labels,
+                dtick=1,
+            ),
+            yaxis=dict(title="Enforcement Actions"),
+            legend=dict(
+                orientation="h", yanchor="top", y=1.08, x=0.5, xanchor="center",
+                font=dict(size=12),
+            ),
+        )
+        # Add total count annotation above each bar
+        for _, row in yoy_stacked.iterrows():
+            fig_yoy.add_annotation(
+                x=row["year"], y=row["count"],
+                text=f"{int(row['count']):,}",
+                showarrow=False, yshift=12,
+                font=dict(size=12, weight="bold"),
+            )
+        st.plotly_chart(fig_yoy, use_container_width=True)
 
     # ── Top Defendants Bar Chart ───────────────────────────────────────
     st.markdown(

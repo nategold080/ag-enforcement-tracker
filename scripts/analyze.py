@@ -6,7 +6,6 @@ Run: python scripts/analyze.py --output data/processed/insights_report.md
 from __future__ import annotations
 
 import sys
-from collections import Counter, defaultdict
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -16,7 +15,7 @@ from rich.console import Console
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sqlalchemy import case, select, func, desc
+from sqlalchemy import case, select, func, desc, distinct
 from sqlalchemy.orm import joinedload
 
 from src.storage.database import Database
@@ -110,7 +109,7 @@ def generate_report(db: Database) -> str:
         ).scalar_one() or Decimal("0")
 
         states_with_data = session.execute(
-            select(func.count(func.distinct(EnforcementAction.state)))
+            select(func.count(distinct(EnforcementAction.state)))
             .where(EnforcementAction.quality_score > 0.1)
         ).scalar_one()
 
@@ -350,16 +349,16 @@ def generate_report(db: Database) -> str:
         multi_state_defendants = session.execute(
             select(
                 Defendant.canonical_name,
-                func.count(func.distinct(EnforcementAction.state)).label("state_count"),
+                func.count(distinct(EnforcementAction.state)).label("state_count"),
                 func.count(ActionDefendant.action_id).label("action_count"),
-                func.group_concat(func.distinct(EnforcementAction.state)).label("states"),
+                func.group_concat(distinct(EnforcementAction.state)).label("states"),
             )
             .select_from(Defendant)
             .join(ActionDefendant, ActionDefendant.defendant_id == Defendant.id)
             .join(EnforcementAction, EnforcementAction.id == ActionDefendant.action_id)
             .where(Defendant.canonical_name != "")
             .group_by(Defendant.canonical_name)
-            .having(func.count(func.distinct(EnforcementAction.state)) > 1)
+            .having(func.count(distinct(EnforcementAction.state)) > 1)
             .order_by(desc("state_count"), desc("action_count"))
         ).all()
 
@@ -383,7 +382,7 @@ def generate_report(db: Database) -> str:
             select(
                 ViolationCategory.category,
                 func.sum(MonetaryTerms.total_amount).label("total"),
-                func.count(func.distinct(EnforcementAction.id)).label("count"),
+                func.count(distinct(EnforcementAction.id)).label("count"),
             )
             .select_from(ViolationCategory)
             .join(EnforcementAction, EnforcementAction.id == ViolationCategory.action_id)

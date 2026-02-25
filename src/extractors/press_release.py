@@ -159,11 +159,12 @@ class PressReleaseExtractor:
             for name in defendants
         ]
 
-        # Quality score
+        # Quality score — only count real categories (not fallback "other")
+        has_real_category = any(c[0] != "other" for c in categories)
         quality_score = self._compute_quality_score(
             has_defendants=bool(defendants),
             has_amount=largest_amount is not None,
-            has_category=bool(categories),
+            has_category=has_real_category,
             has_statute=bool(statutes),
             has_date=announced is not None,
             action_type=action_type,

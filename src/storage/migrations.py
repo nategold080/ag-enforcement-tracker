@@ -65,7 +65,7 @@ def migrate(engine) -> None:
             col_type = sa_col.type.compile(engine.dialect)
             nullable = "NULL" if sa_col.nullable else "NOT NULL"
             default = ""
-            if sa_col.default is not None:
+            if sa_col.default is not None and not callable(sa_col.default.arg):
                 default = f" DEFAULT {sa_col.default.arg!r}"
             sql = f"ALTER TABLE {table} ADD COLUMN {col} {col_type} {nullable}{default}"
             with engine.begin() as conn:

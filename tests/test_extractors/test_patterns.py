@@ -17,6 +17,7 @@ from src.extractors.patterns import (
     extract_filed_date,
     extract_largest_dollar_amount,
     extract_resolved_date,
+    extract_settlement_amount,
     extract_statutes,
     is_multistate_action,
 )
@@ -75,6 +76,24 @@ class TestDollarAmountExtraction:
         largest = extract_largest_dollar_amount(text)
         assert largest is not None
         assert largest.amount == Decimal("10000000")
+
+    def test_soft_hyphen_headline_168m(self):
+        """P1: TX headlines with soft-hyphen stripping: $168Mfor → $168M for."""
+        result = extract_settlement_amount("AG Secures $168Mfor Fraud", "")
+        assert result is not None
+        assert result.amount == Decimal("168000000")
+
+    def test_soft_hyphen_headline_1_1m(self):
+        """P1: TX headlines with soft-hyphen stripping: $1.1Min → $1.1M in."""
+        result = extract_settlement_amount("AG Secures $1.1Min Settlement", "")
+        assert result is not None
+        assert result.amount == Decimal("1100000")
+
+    def test_soft_hyphen_headline_160m(self):
+        """P1: $160MFraud should parse as $160M."""
+        result = extract_settlement_amount("AG Wins $160MFraud Settlement", "")
+        assert result is not None
+        assert result.amount == Decimal("160000000")
 
     def test_real_fixture_settlement_dollar(self, ca_scraper, ca_detail_htmls):
         """Test against real CA fixture: $10M Medi-Cal settlement."""
@@ -231,6 +250,33 @@ class TestDefendantExtraction:
         names = extract_defendants_from_body(text)
         assert len(names) >= 1
 
+    # P2: Garbage name rejection tests
+    def test_rejects_unlawfully_cutting_billions(self):
+        names = extract_defendants_from_headline("AG Sues Unlawfully Cutting Billions for Fraud")
+        assert not any("Unlawfully" in n for n in names)
+
+    def test_rejects_consumers_is(self):
+        names = extract_defendants_from_headline("Settlement with Consumers Is Reached")
+        assert not any("Consumers Is" in n for n in names)
+
+    def test_rejects_human_trafficker(self):
+        names = extract_defendants_from_headline("AG Charges Human Trafficker with Crimes")
+        assert not any("Human Trafficker" in n for n in names)
+
+    def test_rejects_based_company_that(self):
+        names = extract_defendants_from_headline("AG Sues Central Pa.-Based Company That for Fraud")
+        assert not any("Based Company" in n for n in names)
+
+    def test_rejects_disney_largest_settlement(self):
+        names = extract_defendants_from_headline("AG Reaches Settlement with Disney, Largest CCPA Settlement")
+        # Should keep "Disney" but not the full "Disney, Largest CCPA Settlement"
+        for n in names:
+            assert "Largest" not in n
+
+    def test_rejects_that_would_fragment(self):
+        names = extract_defendants_from_headline("AG Sues Over HUD Policy that Would Harm Families")
+        assert not any("that Would" in n for n in names)
+
 
 # ---------------------------------------------------------------------------
 # Statute Extraction
@@ -252,6 +298,35 @@ class TestStatuteExtraction:
         statutes = extract_statutes("in violation of the False Claims Act")
         assert len(statutes) >= 1
         assert any("False Claims Act" in s.raw_citation for s in statutes)
+
+    # P8: Expanded common_name mapping
+    def test_hipaa_common_name(self):
+        statutes = extract_statutes("violated HIPAA privacy requirements")
+        assert any(s.common_name == "HIPAA" for s in statutes)
+
+    def test_fcra_common_name(self):
+        statutes = extract_statutes("in violation of the FCRA reporting requirements")
+        assert any(s.common_name == "FCRA" for s in statutes)
+
+    def test_clean_air_act_common_name(self):
+        statutes = extract_statutes("violated the Clean Air Act emissions standards")
+        assert any(s.common_name == "Clean Air Act" for s in statutes)
+
+    def test_rico_common_name(self):
+        statutes = extract_statutes("charged under RICO for racketeering")
+        assert any(s.common_name == "RICO" for s in statutes)
+
+    def test_udap_common_name(self):
+        statutes = extract_statutes("in violation of the state UDAP statute")
+        assert any(s.common_name == "UDAP" for s in statutes)
+
+    def test_ucl_from_bpc_17200(self):
+        statutes = extract_statutes("Business and Professions Code section 17200")
+        assert any(s.common_name == "UCL" for s in statutes)
+
+    def test_clra_from_civil_code_1750(self):
+        statutes = extract_statutes("Civil Code section 1750 et seq")
+        assert any(s.common_name == "CLRA" for s in statutes)
 
     def test_real_fixture_data_privacy(self, ca_scraper, ca_detail_htmls):
         """The CCPA page should contain CCPA citations."""
@@ -283,3 +358,25 @@ class TestMonetaryComponents:
     def test_no_components(self):
         components = classify_monetary_components("The AG filed an injunction.")
         assert len(components) == 0
+
+
+# ---------------------------------------------------------------------------
+# P4: Non-settlement context filtering
+# ---------------------------------------------------------------------------
+
+class TestNonSettlementContext:
+
+    def test_wage_per_day_rejected(self):
+        """P4: '$1 per day' should not be a settlement amount."""
+        result = extract_settlement_amount("", "paying workers $1 per day wage in violation of law")
+        assert result is None
+
+    def test_ballot_initiative_rejected(self):
+        """P4: Initiative numbers should not be parsed as dollars."""
+        result = extract_settlement_amount("AG Statement on I-776", "Initiative I-776 would change policy.")
+        assert result is None
+
+    def test_face_up_to_rejected(self):
+        """P4: 'could face up to $X' is hypothetical, not a settlement."""
+        result = extract_settlement_amount("", "The company could face up to $10 million in penalties under the law.")
+        assert result is None

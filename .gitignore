@@ -12,8 +12,8 @@ data/processed/*.csv
 data/processed/*.json
 data/processed/*.xlsx
 
-# Database
-*.db
+# Database (allow the main DB for Streamlit Cloud, exclude backups)
+*.db.bak
 *.sqlite
 *.sqlite3
 

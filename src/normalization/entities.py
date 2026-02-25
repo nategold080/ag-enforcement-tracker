@@ -21,6 +21,27 @@ from thefuzz import fuzz
 logger = logging.getLogger(__name__)
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "entities.yaml"
+BLOCKLIST_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "defendant_blocklist.yaml"
+
+
+def _load_defendant_blocklist() -> tuple[set[str], list[re.Pattern]]:
+    """Load the defendant blocklist from config/defendant_blocklist.yaml.
+
+    Returns (exact_matches_set, compiled_patterns_list).
+    The exact_matches_set is lowercased for case-insensitive comparison.
+    """
+    if not BLOCKLIST_PATH.exists():
+        return set(), []
+
+    with open(BLOCKLIST_PATH, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+
+    exact = {entry.lower().strip() for entry in data.get("exact_matches", [])}
+    patterns = [re.compile(p, re.IGNORECASE) for p in data.get("patterns", [])]
+    return exact, patterns
+
+
+_BLOCKLIST_EXACT, _BLOCKLIST_PATTERNS = _load_defendant_blocklist()
 
 # Legal suffixes to strip
 _LEGAL_SUFFIXES = re.compile(
@@ -89,6 +110,16 @@ _ENTITY_STOPWORDS = frozenset({
     "former", "another", "several", "act", "law", "court", "state",
     "federal", "child", "children", "people", "person",
     "real estate", "seller",
+    # Additional single-word nouns that pass extraction but aren't entities
+    "notice", "report", "order", "plan", "claim", "relief", "charge",
+    "grant", "rule", "damage", "risk", "abuse", "penalty", "complaint",
+    "violation", "statute", "settlement", "enforcement", "authority",
+    "oversight", "guidance", "protection", "measure", "effort",
+    "failure", "impact", "safety", "access", "matter", "issue",
+    "harm", "threat", "concern", "policy",
+    # Generic industry terms that pass extraction as single-word "names"
+    "mortgage", "cryptocurrency", "e-cigarette", "companies",
+    "funding", "centers", "patients", "owners",
 })
 
 # Patterns that indicate a "name" is actually a sentence fragment or not a defendant
@@ -161,6 +192,40 @@ _GARBAGE_NAME_PATTERNS = [
     re.compile(r'amicus\s+brief|brief\s+joined\s+by', re.IGNORECASE),
     # "Battleground States", "States on Behalf of"
     re.compile(r'(?:battleground|on\s+behalf\s+of)\s+', re.IGNORECASE),
+    # "[Place]-Based Company That" — truncated fragment
+    re.compile(r'-based\s+company\b', re.IGNORECASE),
+    # "Largest/Biggest XXXX Settlement" — headline fragment
+    re.compile(r'\blargest\s+\w+\s+settlement\b', re.IGNORECASE),
+    # Fragments starting with adverbs
+    re.compile(r'^(?:unlawfully|illegally|fraudulently|knowingly|willfully)\s+', re.IGNORECASE),
+    # "Consumers Is/Are" — sentence fragment
+    re.compile(r'^consumers?\s+(?:is|are|was|were|has|have)\b', re.IGNORECASE),
+    # "Over [Policy]" — prepositional fragment
+    re.compile(r'^over\s+(?:hud|the|a|an|its)\b', re.IGNORECASE),
+    # Single-word generic role nouns
+    re.compile(r'^(?:trafficker|lender|borrower|manufacturer|distributor|retailer|'
+               r'contractor|employer|provider|operator|vendor|dealer|broker)s?$',
+               re.IGNORECASE),
+    # "[Place] man/woman/business/resident" — WA headline patterns
+    re.compile(r'^[A-Z]\w+(?:\s+[A-Z]\w+)?\s+(?:man|woman|men|women|business|resident|couple|family)$',
+               re.IGNORECASE),
+    # Names containing "for [gerund/adjective]" — headline fragments
+    re.compile(r'\bfor\s+(?:deceiving|misleading|defrauding|violating|failing|scamming|'
+               r'harming|exploiting|overcharging|deceptive|illegal|unlawful|false|unfair)',
+               re.IGNORECASE),
+    # Names ending with trailing hyphen (truncated fragments)
+    re.compile(r'-\s*$'),
+    # Generic crypto/e-cigarette/industry descriptors as multi-word "names"
+    # Matches both standalone terms and prefixed names like "Crypto Firm Genesis"
+    re.compile(r'^(?:e-?cigarette|cryptocurrency|crypto|vaping|mortgage|tobacco)\s+'
+               r'(?:platform|companies|company|firm|firms|exchange|exchanges|lender|'
+               r'lenders|broker|brokers|servicer|servicers)s?(?:\s|,|$)',
+               re.IGNORECASE),
+    # "During The" and similar preposition-article fragments misidentified as names
+    re.compile(r'^(?:during|before|after|between|within|toward|upon)\s+(?:the|a|an|this|that)$',
+               re.IGNORECASE),
+    # "Owner [Name] for" patterns — headline fragments with role prefix
+    re.compile(r'^(?:owner|founder|ceo|president|chairman)\s+\w+\s+for\b', re.IGNORECASE),
 ]
 
 
@@ -181,6 +246,15 @@ def is_valid_canonical_name(name: str) -> bool:
     # Exact stopword match
     if name.lower().strip() in _ENTITY_STOPWORDS:
         return False
+
+    # Check against the defendant blocklist (case-insensitive exact match)
+    if name.lower().strip() in _BLOCKLIST_EXACT:
+        return False
+
+    # Check against defendant blocklist patterns
+    for pat in _BLOCKLIST_PATTERNS:
+        if pat.search(name):
+            return False
 
     # Regex patterns
     for pat in _GARBAGE_NAME_PATTERNS:
