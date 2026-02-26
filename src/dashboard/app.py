@@ -1016,7 +1016,12 @@ def main():
             unsafe_allow_html=True,
         )
         if not categories_df.empty:
-            trend_df = categories_df[categories_df["year"].between(2022, 2026)]
+            import datetime as _dt
+            trend_df = categories_df[categories_df["year"].between(2022, 2026)].copy()
+            # Exclude TX records with known bad fallback date (2022-01-01)
+            trend_df = trend_df[
+                ~((trend_df["state"] == "TX") & (trend_df["date"] == _dt.date(2022, 1, 1)))
+            ]
             top_cats = trend_df["category"].value_counts().head(6).index.tolist()
             trend_filtered = trend_df[trend_df["category"].isin(top_cats)]
 
@@ -1028,6 +1033,11 @@ def main():
             )
             trend_pivot["label"] = trend_pivot["category"].map(
                 lambda x: CATEGORY_DISPLAY.get(x, x)
+            )
+
+            _current_year = _dt.date.today().year
+            trend_pivot["year_label"] = trend_pivot["year"].apply(
+                lambda y: f"{y} (YTD)" if y == _current_year else str(y)
             )
 
             fig_trend = px.line(
@@ -1044,7 +1054,13 @@ def main():
                     font=dict(size=11),
                 ),
                 plot_bgcolor="rgba(0,0,0,0)",
-                xaxis=dict(dtick=1),
+                xaxis=dict(
+                    dtick=1,
+                    tickmode="array",
+                    tickvals=trend_pivot["year"].unique().tolist(),
+                    ticktext=[f"{y} (YTD)" if y == _current_year else str(y)
+                              for y in sorted(trend_pivot["year"].unique())],
+                ),
             )
             fig_trend.update_traces(line=dict(width=2.5))
             st.plotly_chart(fig_trend, width="stretch")
@@ -1091,8 +1107,13 @@ def main():
     )
 
     if not actions_df.empty:
+        import datetime
         # Focus on years with meaningful data
         yoy_df = actions_df[actions_df["year"].between(2022, 2026)].copy()
+        # Exclude TX records with known bad fallback date (2022-01-01)
+        yoy_df = yoy_df[
+            ~((yoy_df["state"] == "TX") & (yoy_df["date"] == datetime.date(2022, 1, 1)))
+        ]
         yoy_counts = yoy_df.groupby("year").size().reset_index(name="count")
 
         # Split multistate vs single-state for stacked bar
@@ -1101,7 +1122,6 @@ def main():
         yoy_stacked = yoy_counts.merge(yoy_ms, on="year", how="left").merge(yoy_single, on="year", how="left").fillna(0)
 
         # Sort chronologically
-        import datetime
         current_year = datetime.date.today().year
         yoy_stacked = yoy_stacked.sort_values("year").reset_index(drop=True)
 
