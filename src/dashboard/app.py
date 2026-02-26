@@ -193,6 +193,19 @@ def _is_clean_settlement_headline(headline: str) -> bool:
 
 MIN_QUALITY = 0.1  # Exclude non-enforcement filtered records
 
+# Multiple state scrapers have broken date extraction that assigns fallback
+# dates (e.g. TX→2022-01-01, NY→2022-07-01).  Any (state, date) cluster with
+# >30 records on a single day is almost certainly misdated and should be
+# excluded from time-series charts to avoid distorting trend lines.
+_DATE_CLUSTER_THRESHOLD = 30
+
+
+def _exclude_misdated(df, state_col="state", date_col="date"):
+    """Drop rows belonging to (state, date) pairs that exceed the cluster
+    threshold, indicating a scraper fallback date rather than a real date."""
+    counts = df.groupby([state_col, date_col])[date_col].transform("size")
+    return df[counts <= _DATE_CLUSTER_THRESHOLD]
+
 # Common filter: enforcement-only records (not filtered, not federal litigation)
 def _enforcement_filter():
     return and_(
@@ -1018,10 +1031,7 @@ def main():
         if not categories_df.empty:
             import datetime as _dt
             trend_df = categories_df[categories_df["year"].between(2022, 2026)].copy()
-            # Exclude TX records with known bad fallback date (2022-01-01)
-            trend_df = trend_df[
-                ~((trend_df["state"] == "TX") & (trend_df["date"] == _dt.date(2022, 1, 1)))
-            ]
+            trend_df = _exclude_misdated(trend_df)
             top_cats = trend_df["category"].value_counts().head(6).index.tolist()
             trend_filtered = trend_df[trend_df["category"].isin(top_cats)]
 
@@ -1110,10 +1120,7 @@ def main():
         import datetime
         # Focus on years with meaningful data
         yoy_df = actions_df[actions_df["year"].between(2022, 2026)].copy()
-        # Exclude TX records with known bad fallback date (2022-01-01)
-        yoy_df = yoy_df[
-            ~((yoy_df["state"] == "TX") & (yoy_df["date"] == datetime.date(2022, 1, 1)))
-        ]
+        yoy_df = _exclude_misdated(yoy_df)
         yoy_counts = yoy_df.groupby("year").size().reset_index(name="count")
 
         # Split multistate vs single-state for stacked bar
